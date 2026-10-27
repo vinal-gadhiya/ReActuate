@@ -85,6 +85,9 @@ RUN touch /opt/src/robocasa/robocasa/macros_private.py \
     && mv /opt/src/robocasa/robocasa/models/assets /opt/robocasa-assets \
     && ln -s /opt/robocasa-assets /opt/src/robocasa/robocasa/models/assets
 
-COPY scripts/smoke_test.py /opt/smoke_test.py
+COPY sim/smoke_test.py /opt/smoke_test.py
+COPY core /app/core
+COPY sim /app/sim
+ENV PYTHONPATH=/app
 WORKDIR /workspace
 CMD ["bash"]

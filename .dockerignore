@@ -1,4 +1,12 @@
 **
-!Dockerfile
-!scripts/
-!scripts/smoke_test.py
+!sim/
+!sim/Dockerfile
+!sim/smoke_test.py
+!sim/__init__.py
+!sim/evaluate.py
+!inference/
+!inference/Dockerfile
+!inference/*.py
+!inference/requirements.txt
+!core/
+!core/*.py

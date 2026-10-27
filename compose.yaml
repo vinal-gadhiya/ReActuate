@@ -1,0 +1,42 @@
+services:
+  inference:
+    image: objectworld-gr00t:latest
+    build:
+      context: .
+      dockerfile: inference/Dockerfile
+    runtime: nvidia
+    gpus: all
+    shm_size: 2gb
+    volumes:
+      - checkpoints:/checkpoints
+      - huggingface-cache:/cache/huggingface
+    networks: [robotics]
+    # No published host port: the service is accessed over the Docker network.
+
+  sim:
+    image: robocasa-thor:latest
+    build:
+      context: .
+      dockerfile: sim/Dockerfile
+    runtime: nvidia
+    gpus: all
+    shm_size: 2gb
+    volumes:
+      - assets:/opt/robocasa-assets
+      - ./outputs:/outputs
+    depends_on:
+      inference:
+        condition: service_healthy
+    networks: [robotics]
+    command: ["python", "-m", "sim.evaluate"]
+
+networks:
+  robotics:
+
+volumes:
+  assets:
+    name: robocasa-thor-assets
+  checkpoints:
+    name: objectworld-checkpoints
+  huggingface-cache:
+    name: objectworld-huggingface-cache

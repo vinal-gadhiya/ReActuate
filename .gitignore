@@ -7,3 +7,9 @@
 # Python bytecode.
 __pycache__/
 *.py[cod]
+
+# Local model weights and credentials.
+/checkpoints/
+/.cache/
+.env
+.env.*

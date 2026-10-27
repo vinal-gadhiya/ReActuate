@@ -1,4 +1,20 @@
-# RoboCasa and MuJoCo on Jetson AGX Thor
+# ObjectWorld
+
+ObjectWorld explores how Meta model APIs can improve a frozen vision-language-action
+(VLA) policy through planning, visual verification, and recovery in RoboCasa.
+
+```text
+sim/         RoboCasa execution, rendering, rollouts, evaluation, simulator image
+inference/   VLA serving, Meta API adapters, planning, perception, recovery
+core/        Shared interfaces, configuration conventions, trace formats
+```
+
+Simulation and GR00T N1.5 inference run in independent containers on Jetson AGX
+Thor. Follow [the inference and atomic-task evaluation guide](inference/RUNNING.md)
+to build both images, download the checkpoint, and evaluate `OpenCabinet`.
+The standalone simulator setup is documented below.
+
+## RoboCasa and MuJoCo on Jetson AGX Thor
 
 This image targets **Linux ARM64 on Jetson AGX Thor with JetPack 7.x**,
 NVIDIA's host graphics driver, Docker and NVIDIA Container Toolkit. It uses
@@ -17,7 +33,7 @@ a different compatible CUDA 13 / Ubuntu 24.04 image.
 Copy this repository to the Thor and run from its root:
 
 ```bash
-docker build --platform linux/arm64 -t robocasa-thor:latest .
+docker build --platform linux/arm64 -f sim/Dockerfile -t robocasa-thor:latest .
 ```
 
 Builds download upstream source and Python dependencies. No GPU is needed during
@@ -88,6 +104,3 @@ Source revisions and resolved Python versions are recorded in `/opt/build-info`.
 Source commits are pinned; transitive dependencies, base image digest, and apt
 packages are not fully locked. Override `ROBOCASA_REF` and `ROBOSUITE_REF` as
 build arguments to deliberately change source snapshots.
-
-The Dockerfile and smoke test have not been built or executed on Thor here.
-The commands above are the required hardware validation steps.
