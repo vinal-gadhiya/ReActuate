@@ -5,7 +5,8 @@ pandas==2.2.3
 albumentations==1.4.18
 albucore==0.0.17
 opencv-python-headless==4.11.0.86
-av==14.4.0
+# Python 3.12 / Linux ARM64 wheel bundles its FFmpeg libraries.
+av==15.1.0
 dm-tree==0.1.9
 einops==0.8.1
 hydra-core==1.3.2
