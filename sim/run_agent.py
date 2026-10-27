@@ -11,6 +11,7 @@ import numpy as np
 
 from core.agent import parse_program, validate_decision, validate_plan
 from core.policy_http import PolicyClient, SupervisorClient
+from core.simulator_context import build_simulator_context, load_operator_context
 from sim.evaluate import make_policy_observation, validate_actions
 
 
@@ -151,6 +152,7 @@ def main():
     parser.add_argument('--task', default='MakeIceLemonade')
     parser.add_argument('--mode', choices=('baseline', 'fixed', 'agent'), default='agent')
     parser.add_argument('--plan', type=Path, help='JSON plan for fixed mode or a controlled agent starting plan')
+    parser.add_argument('--context-file', type=Path, help='Optional public task/scene notes JSON')
     parser.add_argument('--policy-url', default='http://inference:8000')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
@@ -180,6 +182,7 @@ def main():
     if args.plan_only and args.mode != 'agent':
         parser.error('--plan-only requires agent mode')
     starting_plan = None
+    operator_context = load_operator_context(args.context_file)
     if args.plan:
         starting_plan = validate_plan(json.loads(args.plan.read_text()))
 
@@ -203,7 +206,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     config.update({'resolved_max_steps': max_steps, 'policy': metadata, 'supervisor': supervisor_metadata,
-                   'starting_plan': starting_plan,
+                   'starting_plan': starting_plan, 'operator_context': operator_context,
                    'versions': {key: version(key) for key in ('robocasa', 'robosuite', 'mujoco', 'numpy')}})
     (args.output / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     results = []
@@ -249,8 +252,24 @@ def main():
                     filename = f'observation-{request_number:03d}-{number}.jpg'
                     imageio.imwrite(directory / filename, frame)
                     references.append({'label': label, 'path': filename})
-                context.update({'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
-                                'api_calls_left': args.max_api_calls - api_calls})
+                decisions_used = sum(item['event'] == 'decision' for item in history)
+                decisions_left = max(0, args.max_decisions - decisions_used)
+                calls_left = args.max_api_calls - api_calls
+                motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
+                context.update({
+                    'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
+                    'api_calls_left': calls_left, 'simulator_context': simulator_context,
+                    'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
+                    'execution_limits': {
+                        'decision_steps': args.decision_steps, 'decisions_left': decisions_left,
+                        'api_calls_left': calls_left, 'motion_step_upper_bound': motion_bound,
+                        'note': 'Optimistic bound: verification, planning, SAM, and replanning consume API calls too.',
+                    },
+                    'robot_measurements': {
+                        key: np.asarray(tools.observation[key]).tolist()
+                        for key in metadata['modalities']['state']['modality_keys']
+                    },
+                })
                 record({'event': 'supervisor_request', 'operation': operation, 'request': request_number,
                         'step': tools.steps, 'context': context, 'images': references})
                 response = supervisor.ask(operation, context, images)
@@ -263,6 +282,11 @@ def main():
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
                 video.append_data(observation[camera_keys[0]])
                 tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps, args.allow_gripper)
+                simulator_context = build_simulator_context(
+                    args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
+                    ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
+                )
+                (directory / 'simulator_context.json').write_text(json.dumps(simulator_context, indent=2) + '\n')
                 if args.mode == 'baseline':
                     plan = [{'id': 'original', 'instruction': goal, 'target': 'task objects',
                              'success_criteria': 'Complete the original task', 'max_steps': max_steps}]

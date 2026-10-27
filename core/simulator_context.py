@@ -1,0 +1,74 @@
+"""Public simulator/capability context; never inspect task-private object state."""
+
+import json
+
+CONTEXT_VERSION = 1
+SIMULATOR_GUIDE = {
+    'simulator': 'RoboCasa kitchen manipulation on MuJoCo',
+    'robot': {
+        'embodiment': 'PandaOmron',
+        'description': 'A wheeled mobile base with one Panda arm and a parallel-jaw gripper; it does not walk.',
+        'executor': 'Frozen GR00T N1.5 predicts arm, gripper, and base actions from current images, proprioception, and language.',
+    },
+    'observation_rules': [
+        'RGB images are partial views, not a complete scene inventory.',
+        'Proprioception describes the robot, not ground-truth object locations or contacts.',
+        'No object depth, object poses, contact labels, or task-success predicates are supplied to this supervisor.',
+        'A task-mentioned object may be occluded or inside a container; not visible does not mean absent.',
+        'A visible object may be a distractor. Match task attributes and relations before selecting it.',
+        'SAM candidates are perception estimates, not proof of identity, contact, or containment.',
+    ],
+    'execution_rules': [
+        'Subtasks execute in the original task environment. Atomic-task names do not create or switch environments.',
+        'Physical scene state persists across subtask transitions and replans.',
+        'Only listed tools exist. No move_eef, navigation planner, IK solver, or generic pick/place primitive is installed.',
+        'A run_groot instruction is a request to a fallible policy, not a guaranteed skill.',
+        'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',
+        'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
+        'Use observable stopping conditions: lift-and-move evidence is stronger than gripper closure alone.',
+        'Subtask max_steps values are ceilings; episode, decision, and API limits may stop execution earlier.',
+    ],
+}
+
+
+def load_operator_context(path):
+    if path is None:
+        return {}
+    if path.stat().st_size > 16000:
+        raise ValueError('Context file must be at most 16 KB')
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or set(value) - {'task_notes', 'scene_notes', 'constraints'}:
+        raise ValueError('Context file accepts task_notes, scene_notes, and constraints only')
+    for key in ('task_notes', 'scene_notes'):
+        if key in value and (not isinstance(value[key], str) or len(value[key]) > 4000):
+            raise ValueError(f'{key} must be a string of at most 4000 characters')
+    if 'constraints' in value:
+        constraints = value['constraints']
+        if not isinstance(constraints, list) or len(constraints) > 20 or any(
+            not isinstance(item, str) or not 0 < len(item.strip()) <= 500 for item in constraints
+        ):
+            raise ValueError('constraints must contain at most 20 short strings')
+    return value
+
+
+def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gripper, operator_context):
+    return {
+        'version': CONTEXT_VERSION, 'guide': SIMULATOR_GUIDE,
+        'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
+                 'instruction_source': 'original_goal is the episode description, not a generic task summary'},
+        'policy_reference': {
+            'registered_atomic_task_names': sorted(atomic_tasks),
+            'meaning': 'Task-category vocabulary only, not tools, scene entities, or verified GR00T competencies.',
+        },
+        'cameras': [{
+            'key': key, 'role': 'wrist camera' if 'eye_in_hand' in key else 'external robot camera',
+            'width': metadata['camera_width'], 'height': metadata['camera_height'],
+        } for key in metadata['modalities']['video']['modality_keys']],
+        'tools': {
+            'run_groot': {'available': True, 'arguments': 'instruction: str, steps: positive int',
+                          'meaning': 'A short policy burst in the current scene'},
+            'set_gripper': {'available': bool(allow_gripper), 'arguments': 'closed: bool, steps: int in [1,10]',
+                            'meaning': 'Gripper command with zero commanded arm/base delta; not a grasp skill'},
+        },
+        'operator_context': {'source': 'operator supplied; not independently verified', 'notes': operator_context},
+    }

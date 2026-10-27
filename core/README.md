@@ -15,6 +15,11 @@ literal-call command language. `SupervisorClient` exchanges visual observations
 and agent context with the Meta supervisor. No generated code receives the raw
 simulator object or a general-purpose Python execution capability.
 
+`simulator_context.py` supplies the public simulator guide, tool descriptions,
+task-category references, and optional operator notes. It never queries hidden
+objects or task predicates. The simulator adds current robot measurements and
+remaining execution budgets to each request.
+
 | Message | Required meaning |
 | --- | --- |
 | Observation | Schema version; run/episode/step IDs; simulated timestamp; instruction version; task instruction; RGB frames/camera IDs; proprioception; optional declared depth/calibration |

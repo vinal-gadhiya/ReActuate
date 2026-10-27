@@ -25,6 +25,19 @@ Use the images to ground references; do not invent hidden objects or positions.
 The same scene continues across subtasks: no reset, teleport, or task swapping.
 GR00T can fail. Do not assume that an executable plan guarantees success.'''
 
+CONTEXT_PROMPT = '''Use simulator_context as the description of this harness and
+its tool limits. The task's original_goal is authoritative. Atomic-task names are
+reference vocabulary, not functions or a list of objects present. Ground each
+object/tool/prerequisite in the original task, labeled images, or attributed
+operator notes. Keep those sources distinct: operator notes can be mistaken and
+task-mentioned objects can be occluded. Do not invent exact positions or conclude
+that an occluded required object is absent. Inspect/access containers before
+depending on their contents. For uncertain prerequisites use an executable
+verification/access step or state the limitation. Never infer skill reliability
+from an atomic-task name. Budget against execution_limits.motion_step_upper_bound,
+not only the task horizon; this bound is optimistic because verification consumes
+calls. A motion request or previously generated plan is not observed evidence.'''
+
 DECIDE_PROMPT = '''You supervise a frozen robot policy in one continuous RoboCasa
 episode. Compare the labeled before/current images and bounded execution history
 against the current subtask's success_criteria and the original task. Output:
@@ -96,7 +109,7 @@ class Supervisor:
         content = [{'type': 'input_text', 'text': json.dumps({'context': context, 'sam': grounding})}]
         for name, frame in sorted(images.items()):
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
-        prompt = PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT
+        prompt = CONTEXT_PROMPT + '\n\n' + (PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT)
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)

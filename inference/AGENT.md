@@ -14,6 +14,48 @@ PandaOmron action schema with a fixed-impedance, symmetric delta OSC controller.
 Cartesian motion planning, inverse kinematics, and automatic skill-library
 learning are not implemented in this first version.
 
+## What context the model receives
+
+Each planning and verification request includes a public simulator guide:
+
+- PandaOmron's wheeled base, single arm, gripper, and fallible GR00T executor.
+- The current task name/type and original episode instruction.
+- Camera identities, resolutions, current RGB images, and robot proprioception.
+- Enabled tools and their limits, including whether direct gripper control is available.
+- Registered atomic task names as reference vocabulary, not callable tools or
+  claims that GR00T has mastered those tasks.
+- Episode, decision, and API budgets, with an optimistic bound on remaining
+  executable motion steps. Subtask budgets must account for these limits.
+- Explicit rules about occlusion, distractors, required prerequisites, release,
+  observable completion, and persistent scene state.
+
+The initial planning request receives the same capability context as later
+decisions. `simulator_context.json` records the static context for each episode;
+`trace.jsonl` records the actual context and robot measurements sent per request.
+
+The model does not receive a complete simulator object inventory, hidden object
+poses, or task predicates. Objects named by the task can be hidden; objects seen
+in images can be distractors. Prompts require the model to distinguish these
+sources of evidence rather than inventing locations or treating occlusion as
+absence. This reduces unsupported plans but does not guarantee feasibility.
+
+Optional operator-written notes can add documented task constraints or scene
+observations. Save a JSON file under the mounted `outputs/` directory:
+
+```json
+{
+  "task_notes": "After placing an object, release it and move the gripper clear.",
+  "scene_notes": "",
+  "constraints": ["Do not add cleanup steps that the original goal does not request."]
+}
+```
+
+Add `--context-file /outputs/task-context.json` to `sim.run_agent`. Notes are
+attributed to the operator, retained in run artifacts, and not treated as
+independently verified observations. Keep hidden simulator annotations out of
+normal runs; disclose any oracle-assisted conditions separately. No extra API
+call is needed to supply this context.
+
 ## Containers
 
 - `sim`: owns the scene, task score, subtask execution budgets, and video recording.
