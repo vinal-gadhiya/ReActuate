@@ -34,6 +34,12 @@ metadata's RECORD entry and then runs `pip check` normally. Package versions and
 native binaries are unchanged. The repair is recorded in
 `/opt/build-info/cusparselt-metadata.json`.
 
+The checkpoint uses SigLIP vision. Optional RADIO imports are deferred until a
+RADIO backbone is selected, preventing its FlashAttention dependency from loading
+for SigLIP. Build checks load Eagle's dynamic configuration and model class
+without allocating weights or requiring a GPU. Generated Transformers modules
+use a container-local cache; downloaded model artifacts remain persistent.
+
 ## 2. Download the checkpoint
 
 ```bash

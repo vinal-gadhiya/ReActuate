@@ -48,7 +48,12 @@ RUN python /opt/setup/prepare_upstream.py /opt/Isaac-GR00T /opt/setup/requiremen
 
 COPY inference/repair_cuda_metadata.py /opt/setup/
 RUN python /opt/setup/repair_cuda_metadata.py && python -m pip check
-RUN python -c 'from gr00t.model.policy import Gr00tPolicy; from gr00t.experiment.data_config import DATA_CONFIG_MAP; assert "panda_omron" in DATA_CONFIG_MAP' \
+COPY inference/patch_radio_imports.py inference/check_imports.py /opt/setup/
+# Generated Transformers code follows this image's patched source, independently
+# of the persistent model download cache.
+ENV HF_MODULES_CACHE=/tmp/objectworld-hf-modules
+RUN python /opt/setup/patch_radio_imports.py /opt/Isaac-GR00T \
+    && python /opt/setup/check_imports.py \
     && python -m pip freeze > /opt/build-info/pip-freeze.txt
 
 COPY core /app/core
