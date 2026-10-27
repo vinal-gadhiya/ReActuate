@@ -27,6 +27,13 @@ unchanged; this backend/version combination needs validation on Thor before
 performance or benchmark comparisons. Exact transitive packages and base image
 digests are not fully locked; resolved packages are saved in `/opt/build-info`.
 
+The CUDA 13 cuSPARSELt 0.8.0 ARM64 wheel has an incorrect internal `sbsa`
+platform tag. The build repairs that metadata only after checking its version,
+ELF architecture, installed file hashes, and library loading. It updates the
+metadata's RECORD entry and then runs `pip check` normally. Package versions and
+native binaries are unchanged. The repair is recorded in
+`/opt/build-info/cusparselt-metadata.json`.
+
 ## 2. Download the checkpoint
 
 ```bash

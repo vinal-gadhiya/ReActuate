@@ -44,9 +44,11 @@ RUN git lfs install --system \
 
 COPY inference/requirements.txt inference/prepare_upstream.py /opt/setup/
 RUN python /opt/setup/prepare_upstream.py /opt/Isaac-GR00T /opt/setup/requirements.txt \
-    && python -m pip install --only-binary=av -e /opt/Isaac-GR00T \
-    && python -m pip check \
-    && python -c 'from gr00t.model.policy import Gr00tPolicy; from gr00t.experiment.data_config import DATA_CONFIG_MAP; assert "panda_omron" in DATA_CONFIG_MAP' \
+    && python -m pip install --only-binary=av -e /opt/Isaac-GR00T
+
+COPY inference/repair_cuda_metadata.py /opt/setup/
+RUN python /opt/setup/repair_cuda_metadata.py && python -m pip check
+RUN python -c 'from gr00t.model.policy import Gr00tPolicy; from gr00t.experiment.data_config import DATA_CONFIG_MAP; assert "panda_omron" in DATA_CONFIG_MAP' \
     && python -m pip freeze > /opt/build-info/pip-freeze.txt
 
 COPY core /app/core
