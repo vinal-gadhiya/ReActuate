@@ -1,0 +1,9 @@
+# Generated simulator images and videos.
+/outputs/
+
+# macOS metadata.
+.DS_Store
+
+# Python bytecode.
+__pycache__/
+*.py[cod]
