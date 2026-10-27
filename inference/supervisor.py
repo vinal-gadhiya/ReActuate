@@ -20,7 +20,15 @@ ordering, and the complete original goal. Prefer actionable atomic goals such as
 opening a drawer or placing a named object, not arbitrary joint commands or an
 assumption that GR00T understands precise distances. Each subtask needs a short
 instruction, a simple noun phrase target for SAM, visible success criteria, and
-a bounded max_steps (1–1000). Budget conservatively within the episode horizon.
+a bounded max_steps (1–1000). max_steps counts executed environment control
+steps over the ENTIRE subtask, across multiple supervisor decisions. It is not
+seconds, model calls, or the size of one action burst. Use
+execution_limits.control_frequency_hz to interpret simulated duration:
+duration_seconds = max_steps / control_frequency_hz. Opening a door or moving an
+object can require many bursts and hundreds of control steps; do not assign a
+whole manipulation just one burst by default. These are provisional ceilings,
+not measured skill runtimes. The supervisor can finish early on visible evidence.
+Budget conservatively within the episode horizon.
 Use the images to ground references; do not invent hidden objects or positions.
 The same scene continues across subtasks: no reset, teleport, or task swapping.
 GR00T can fail. Do not assume that an executable plan guarantees success.'''
@@ -36,7 +44,9 @@ depending on their contents. For uncertain prerequisites use an executable
 verification/access step or state the limitation. Never infer skill reliability
 from an atomic-task name. Budget against execution_limits.motion_step_upper_bound,
 not only the task horizon; this bound is optimistic because verification consumes
-calls. A motion request or previously generated plan is not observed evidence.'''
+calls. decision_steps limits one program, while a subtask max_steps spans many
+programs. Apply this distinction to replacement_steps too. A motion request or
+previously generated plan is not observed evidence.'''
 
 DECIDE_PROMPT = '''You supervise a frozen robot policy in one continuous RoboCasa
 episode. Compare the labeled before/current images and bounded execution history
@@ -93,7 +103,10 @@ class Supervisor:
             validate_plan({'steps': [context['step']]})
         audit = []
         grounding = None
-        if self.use_sam and operation == 'decide' and remaining >= 2:
+        use_sam = context.get('use_sam', self.use_sam)
+        if type(use_sam) is not bool:
+            raise ValueError('use_sam must be a boolean')
+        if use_sam and operation == 'decide' and remaining >= 2:
             key = next(key for key in sorted(images) if key.startswith('current:'))
             frame = images[key]
             target = context['step']['target']

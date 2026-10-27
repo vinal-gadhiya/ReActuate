@@ -154,6 +154,37 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(reply['api_calls'], 1)
         self.assertEqual(calls[0][0], 'test-model')
 
+    def test_sam_override_controls_calls_and_forwards_boxes_to_muse(self):
+        calls = []
+
+        class FakeAPI:
+            def response(self, model, content, instructions=None, schema=None):
+                calls.append((model, content))
+                if model == 'sam-3.1':
+                    return '<|box;x1=1;y1=1;x2=4;y2=3;w=6;h=4|>', {'model': model}
+                return decision(), {'model': model}
+
+        supervisor = Supervisor(FakeAPI(), 'test-model', use_sam=False)
+        context = {'api_calls_left': 3, 'use_sam': True, 'step': step('a', 'open cabinet'),
+                   'decision_step_limit': 40, 'capabilities': {'set_gripper': False}}
+        images = {'current:camera': np.ones((4, 6, 3), dtype=np.uint8),
+                  'before:camera': np.zeros((4, 6, 3), dtype=np.uint8)}
+        reply = supervisor.handle('decide', context, images)
+        self.assertEqual(reply['api_calls'], 2)
+        self.assertEqual([call[0] for call in calls], ['sam-3.1', 'test-model'])
+        sent = json.loads(calls[-1][1][0]['text'])
+        self.assertEqual(sent['sam']['boxes'][0]['x1'], 1)
+        self.assertEqual(sum(part['type'] == 'input_image' for part in calls[-1][1]), 2)
+        calls.clear()
+        reply = supervisor.handle('decide', {**context, 'use_sam': False}, images)
+        self.assertEqual(reply['api_calls'], 1)
+        self.assertIsNone(reply['sam'])
+        self.assertEqual([call[0] for call in calls], ['test-model'])
+        calls.clear()
+        reply = supervisor.handle('decide', {**context, 'api_calls_left': 1}, images)
+        self.assertIsNone(reply['sam'])
+        self.assertEqual(len(calls), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

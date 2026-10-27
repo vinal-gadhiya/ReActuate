@@ -5,6 +5,7 @@
 !sim/__init__.py
 !sim/evaluate.py
 !sim/run_agent.py
+!sim/compare.py
 !inference/
 !inference/Dockerfile
 !inference/Dockerfile.supervisor

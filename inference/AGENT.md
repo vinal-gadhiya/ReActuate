@@ -198,6 +198,10 @@ evaluation. Neither baseline nor fixed mode calls Meta APIs.
 
 ## Optional SAM grounding
 
+Use `--sam` or `--no-sam` on `sim.run_agent` to choose grounding per run without
+recreating the supervisor. If neither is supplied, the supervisor's environment
+setting is used. These flags affect SAM calls at decision boundaries, not GR00T.
+
 Set `META_USE_SAM=1` in `.env`, then recreate only the supervisor:
 
 ```bash
@@ -210,6 +214,65 @@ segmentation output is retained in the audit trace. This version does not decode
 masks into a 3D pose or use SAM to modify GR00T images. Boxes alone cannot verify
 contact, containment, or grasp success. SAM adds up to one API call per decision
 and is skipped when only one call remains for the Muse decision.
+
+## Run a closed-loop comparison
+
+The agent loop pauses simulation while Muse responds. Each decision receives
+current camera snapshots and the snapshots from the preceding supervisor call.
+It chooses a bounded program, the dispatcher executes it in the same scene,
+and the next decision receives fresh observations. This is synchronous closed-loop
+supervision, not continuous frame-by-frame API streaming.
+
+Start with a single atomic task and seed to check the entire pipeline:
+
+```bash
+sudo docker compose --profile agent build supervisor sim
+sudo docker compose --profile agent run --rm --no-deps supervisor \
+  python -m unittest discover -s tests -v
+sudo docker compose --profile agent up -d inference supervisor
+sudo docker compose --profile agent run --rm sim \
+  python -m sim.compare \
+    --task OpenCabinet --seeds 0 \
+    --output /outputs/open-cabinet-comparison-001
+```
+
+For each scene seed, the comparison runs these conditions sequentially:
+
+1. `baseline`: GR00T with the original task instruction, without Muse or SAM.
+2. `muse`: Muse planning, visual verification, instruction updates, and replanning.
+3. `muse_sam`: the same initial plan as `muse`, plus target boxes from SAM at
+   decision boundaries. Later decisions and replans can differ.
+
+The task split, seed, episode horizon, and GR00T action chunk length match across
+conditions. Direct gripper intervention is disabled in all conditions. Each agent
+episode allows at most 90 decisions and 200 API calls by default. SAM consumes an
+additional call per decision; actual use depends on early completion and stopping.
+This can involve substantial API usage: start with one seed and inspect the trace.
+Lowering `--max-api-calls` may end the SAM run earlier than the Muse-only run.
+
+The runner writes `comparison.md` and `comparison.json` after every completed
+condition. Each condition retains its video, plan, trace, and metrics under
+`seed-N/CONDITION/`. `sam_calls_with_boxes` reports whether SAM found candidate
+regions; it does not establish that those regions were correct or useful.
+`subtasks_marked_complete` records Muse claims, not simulator task success.
+Errors stop the comparison and are reported separately from completed failures.
+
+Once the one-seed run works, use a new directory and more seeds:
+
+```bash
+sudo docker compose --profile agent run --rm sim \
+  python -m sim.compare \
+    --task MakeIceLemonade --seeds 0 1 2 \
+    --output /outputs/lemonade-comparison-001
+```
+
+Review success alongside videos, stop reasons, steps, API calls, and wall time.
+An atomic task probes recovery and verification; a composite task additionally
+probes decomposition. The existing `fixed` mode can isolate the value of an
+instruction sequence without feedback. Matched scene seeds do not make GR00T
+sampling or Meta outputs identical, and a few episodes are diagnostic evidence,
+not a reliable performance estimate. A run with SAM boxes but no success gain is
+also a valid result; boxes alone add no grasp or motion-planning skill.
 
 ## Artifacts and limits
 

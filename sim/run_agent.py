@@ -165,6 +165,8 @@ def main():
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
     parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
+    parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
+                        help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -261,6 +263,8 @@ def main():
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
                     'execution_limits': {
+                        'step_unit': 'one executed environment control step, not seconds or API calls',
+                        'control_frequency_hz': float(env.unwrapped.env.control_freq),
                         'decision_steps': args.decision_steps, 'decisions_left': decisions_left,
                         'api_calls_left': calls_left, 'motion_step_upper_bound': motion_bound,
                         'note': 'Optimistic bound: verification, planning, SAM, and replanning consume API calls too.',
@@ -270,11 +274,15 @@ def main():
                         for key in metadata['modalities']['state']['modality_keys']
                     },
                 })
+                if args.sam is not None:
+                    context['use_sam'] = args.sam
                 record({'event': 'supervisor_request', 'operation': operation, 'request': request_number,
                         'step': tools.steps, 'context': context, 'images': references})
+                request_started = time.monotonic()
                 response = supervisor.ask(operation, context, images)
                 api_calls += response['api_calls']
-                record({'event': 'supervisor_response', 'request': request_number, **response})
+                record({'event': 'supervisor_response', 'request': request_number,
+                        'wall_seconds': time.monotonic() - request_started, **response})
                 previous_images = current
                 request_number += 1
                 return response['result']

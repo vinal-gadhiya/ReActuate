@@ -10,6 +10,8 @@ policy clients, rollout recording, task scoring, and experiment execution.
   per-episode videos and JSON results. See [the run guide](../inference/RUNNING.md).
 - `run_agent.py`: atomic or composite tasks with the original instruction, a
   fixed subtask schedule, or Muse-supervised execution. See [the agent guide](../inference/AGENT.md).
+- `compare.py`: sequential comparisons of GR00T, Muse, and Muse + SAM on matched
+  scene seeds, with videos, traces, and aggregated task-success and latency results.
 
 Assets use `robocasa-thor-assets:/opt/robocasa-assets`; generated artifacts go
 under ignored `outputs/`. Keep model weights and API credentials out of this image.
