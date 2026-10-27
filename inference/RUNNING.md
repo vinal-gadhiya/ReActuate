@@ -17,6 +17,9 @@ the official CUDA 13 ARM64 wheel index, and the leaderboard's pinned GR00T fork.
 The simulator keeps its own Python environment. The build runs dependency and
 GR00T import checks without requiring a GPU.
 
+Source checkout downloads LFS objects only under `gr00t/`. Upstream demo media
+is excluded so missing media objects do not block the inference build.
+
 The fork's training dependency list is replaced with the inference requirements
 in `inference/requirements.txt`. Its bundled Eagle config and vision constructor
 use eager attention to avoid a FlashAttention extension build. Weights and policy transforms remain

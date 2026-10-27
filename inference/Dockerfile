@@ -33,11 +33,13 @@ RUN python -m pip install torch==2.9.1 torchvision==0.24.1 \
     && python -c 'from importlib.metadata import version; print("torch==" + version("torch")); print("torchvision==" + version("torchvision"))' > /opt/build-info/torch-constraints.txt
 ENV PIP_CONSTRAINT=/opt/build-info/torch-constraints.txt
 
+# Skip upstream demo media; hydrate only LFS files used by the runtime package.
 RUN git lfs install --system \
     && git init /opt/Isaac-GR00T \
     && git -C /opt/Isaac-GR00T remote add origin https://github.com/robocasa-benchmark/Isaac-GR00T.git \
     && git -C /opt/Isaac-GR00T fetch --depth 1 origin "${GROOT_REF}" \
-    && git -C /opt/Isaac-GR00T checkout --detach FETCH_HEAD \
+    && GIT_LFS_SKIP_SMUDGE=1 git -C /opt/Isaac-GR00T checkout --detach FETCH_HEAD \
+    && git -C /opt/Isaac-GR00T lfs pull --include="gr00t/**" --exclude="" origin \
     && git -C /opt/Isaac-GR00T rev-parse HEAD > /opt/build-info/gr00t.commit
 
 COPY inference/requirements.txt inference/prepare_upstream.py /opt/setup/
