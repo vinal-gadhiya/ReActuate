@@ -60,3 +60,12 @@ class PolicyClient:
 
     def predict(self, observations):
         return decode_arrays(self._request('/predict', encode_arrays(observations)))
+
+
+class SupervisorClient(PolicyClient):
+    def ask(self, operation, context, images):
+        if operation not in ('plan', 'decide'):
+            raise ValueError('Unknown supervisor operation')
+        payload = dict(images)
+        payload['__context'] = np.asarray(json.dumps(context))
+        return json.loads(self._request('/' + operation, encode_arrays(payload)))

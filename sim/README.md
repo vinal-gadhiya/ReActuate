@@ -8,6 +8,8 @@ policy clients, rollout recording, task scoring, and experiment execution.
 - `smoke_test.py`: physics, NVIDIA EGL, and optional kitchen checks.
 - `evaluate.py`: atomic-task evaluation against the GR00T HTTP service, with
   per-episode videos and JSON results. See [the run guide](../inference/RUNNING.md).
+- `run_agent.py`: atomic or composite tasks with the original instruction, a
+  fixed subtask schedule, or Muse-supervised execution. See [the agent guide](../inference/AGENT.md).
 
 Assets use `robocasa-thor-assets:/opt/robocasa-assets`; generated artifacts go
 under ignored `outputs/`. Keep model weights and API credentials out of this image.

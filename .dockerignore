@@ -4,9 +4,13 @@
 !sim/smoke_test.py
 !sim/__init__.py
 !sim/evaluate.py
+!sim/run_agent.py
 !inference/
 !inference/Dockerfile
+!inference/Dockerfile.supervisor
 !inference/*.py
 !inference/requirements.txt
 !core/
 !core/*.py
+!tests/
+!tests/*.py

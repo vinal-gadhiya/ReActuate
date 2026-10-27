@@ -10,6 +10,11 @@ action dictionaries using HTTP. NPZ reads disable pickle. Inference responses
 echo request IDs so the simulator can reject stale results. This initial runner
 is synchronous; broader skill/verification schemas below remain planned.
 
+`agent.py` defines and validates subtask plans, verification decisions, and the
+literal-call command language. `SupervisorClient` exchanges visual observations
+and agent context with the Meta supervisor. No generated code receives the raw
+simulator object or a general-purpose Python execution capability.
+
 | Message | Required meaning |
 | --- | --- |
 | Observation | Schema version; run/episode/step IDs; simulated timestamp; instruction version; task instruction; RGB frames/camera IDs; proprioception; optional declared depth/calibration |

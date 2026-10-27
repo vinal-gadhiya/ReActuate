@@ -14,6 +14,10 @@ Thor. Follow [the inference and atomic-task evaluation guide](inference/RUNNING.
 to build both images, download the checkpoint, and evaluate `OpenCabinet`.
 The standalone simulator setup is documented below.
 
+For composite tasks, [the Meta agent guide](inference/AGENT.md) covers Muse
+decomposition, bounded robot programs, visual verification, optional SAM
+grounding, and comparisons with fixed plans and the original GR00T instruction.
+
 ## RoboCasa and MuJoCo on Jetson AGX Thor
 
 This image targets **Linux ARM64 on Jetson AGX Thor with JetPack 7.x**,

@@ -4,6 +4,10 @@ Own VLA serving, model-specific observation/action adapters, Meta API clients,
 visual evidence extraction, planning, progress verification, and recovery.
 Orchestration belongs here; `core/` holds only shared definitions.
 
+The [Meta agent guide](AGENT.md) describes the implemented Muse planner,
+supervisor service, bounded command programs, optional SAM grounding, and
+composite-task runs. The supervisor uses a separate lightweight CPU image.
+
 Add modules when their first use is implemented:
 
 - `vla/`: GR00T adapter first; replaceable policy interface later.

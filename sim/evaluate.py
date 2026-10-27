@@ -12,8 +12,8 @@ import numpy as np
 from core.policy_http import PolicyClient
 
 
-def make_policy_observation(observation, metadata):
-    """Keep RoboCasa's RGB orientation, state values, and task language intact."""
+def make_policy_observation(observation, metadata, instruction=None):
+    """Preserve sensors; optionally replace only the policy's language input."""
     result = {}
     for name, modality in metadata['modalities'].items():
         if name == 'action':
@@ -21,7 +21,7 @@ def make_policy_observation(observation, metadata):
         for key in modality['modality_keys']:
             if key not in observation:
                 raise ValueError(f'Missing observation: {key}')
-            value = np.asarray(observation[key])
+            value = np.asarray(instruction if name == 'language' and instruction is not None else observation[key])
             if name == 'video':
                 expected = (metadata['camera_height'], metadata['camera_width'], 3)
                 if value.shape != expected or value.dtype != np.uint8:
