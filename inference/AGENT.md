@@ -285,8 +285,9 @@ For each scene seed, the comparison runs these conditions sequentially:
 
 1. `baseline`: GR00T with the original task instruction, without Muse or SAM.
 2. `muse`: Muse planning, visual verification, instruction updates, and replanning.
-3. `muse_sam`: the same initial plan as `muse`, plus adaptive SAM detection and
-   clip tracking at decision boundaries. Later decisions and replans can differ.
+3. `muse_sam`: the same initial plan as `muse`, plus adaptive SAM image detection
+   at decision boundaries. Add `--sam-video` to `sim.compare` to opt into clip
+   tracking. Later decisions and replans can differ.
 
 The task split, seed, episode horizon, and GR00T action chunk length match across
 conditions. Direct gripper intervention is disabled in all conditions. Each agent
@@ -350,7 +351,7 @@ unseen objects. Muse must assess motion, target reacquisition, and retention of
 any possibly held object after each burst. Destination search should not cause
 a second source pick or substitute a distractor for the original object.
 
-With `--sam`, the runner retains up to eight RGB samples per camera, sampled
+With `--sam --sam-video`, the runner retains up to eight RGB samples per camera, sampled
 every eight control steps plus the latest endpoint. SAM track mode encodes the
 selected camera samples as H.264 MP4 inside the supervisor container and submits
 the clip to SAM 3.1; Muse receives that clip and frame-level tracking records.
@@ -360,6 +361,9 @@ Tracking uses a concept prompt and produces clip-local object IDs; IDs are not
 treated as globally consistent across clips or cameras. Raw masks remain in the
 audit. Current-frame boxes are separated from earlier tracking records. Without
 SAM, Muse still has RGB snapshots and persistent memory, but no SAM tracking.
+SAM defaults to image-only detection, even if Muse asks for track mode. Video is
+an explicit run setting so image and clip failures can be isolated. SAM cannot
+change the simulator's cameras; requests contain copies of rendered observations.
 
 SAM uses at most one call per decision and is skipped when only one call remains
 for Muse. Track requests cost differently from images; the provider documents a
@@ -378,6 +382,49 @@ The supervisor's Muse output limit defaults to 8192 tokens, configurable with
 `META_MAX_OUTPUT_TOKENS` in `.env` (1024–16384). Incomplete responses report the
 provider's reason when available. They remain errors; increasing the cap does
 not guarantee completion. An error artifact retains the last step and memory.
+SAM requests default to a 180-second timeout (`META_SAM_TIMEOUT`, maximum 240);
+the supervisor client allows 480 seconds for the combined SAM/Muse request.
+Timeouts remain errors and are not automatically retried or counted as policy
+task failures. Connection errors and timeouts are reported separately.
+
+## Scene and RGB integrity
+
+The comparison runner fixes `PYTHONHASHSEED` for child processes. The simulator
+seeds Python and NumPy and selects an explicit valid layout/style pair from the
+requested split, applying the task's exclusions. It uses that singleton pair and
+preserves the requested object-instance split when constructing RoboCasa.
+
+Every episode saves `scene.json`: layout/style, instruction, hashes of initial
+episode metadata, model XML, and rounded simulator state, plus initial RGB hashes.
+Supervised conditions must match the baseline fingerprint before any actions or
+Meta requests. A mismatch aborts the comparison rather than silently comparing
+different scenes. The fingerprint is privileged evaluation metadata and is never
+sent to the supervisor or policy. It does not seed stochastic GR00T/API sampling
+or prove identical GPU-rendered pixels. Old results without scene fingerprints
+cannot establish matched conditions. Use new output directories after this change.
+
+Raw RGB arrays are checksummed in the simulator and verified after transport in
+the supervisor. API image inputs use lossless PNG. `received_image_diagnostics`
+in each supervisor response can be compared with the request's diagnostics.
+If every current camera has extreme high-frequency pixel noise, a heuristic
+guard stops before the next policy/API request and saves
+`suspected-noise-step-*.npz`, per-camera PNGs, and `image_quality_error.json`.
+Inspect these source pixels; the heuristic does not diagnose an EGL/driver bug.
+If source images are clean but Muse reports noise, inspect API/media handling
+rather than treating the text report as proof of simulator corruption.
+`inspect` explicitly refreshes the declared sensors at the same robot pose without
+advancing physics. It can refresh a stale render, but cannot provide a new vantage
+point or repair an underlying driver/rendering failure.
+
+Fixture memory keeps the last observed location and evidence even when current
+visibility becomes uncertain, so the robot can revisit a previously seen sink.
+This does not add navigation support for dining counters or arbitrary coordinates.
+While a grasp is supported and the destination is visible (or placement phase
+is selected), motion bursts are capped at eight control steps by default
+(`--placement-burst-steps`). Truncation is logged as `bounded_execution` and no
+unused action queue survives. Muse is prompted to request placement rather than
+another pickup from the old source. This increases feedback frequency; it cannot
+guarantee retention, collision avoidance, or a successful placement.
 
 Rebuild both containers because the shared decision schema now requires
 `assessment`, `memory_updates`, and `perception` in addition to the existing

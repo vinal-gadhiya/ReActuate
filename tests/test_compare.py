@@ -23,6 +23,9 @@ class CompareTests(unittest.TestCase):
         self.assertIn('--sam', sam)
         self.assertEqual(sam[sam.index('--subtask-budget-mode') + 1], 'episode')
         self.assertNotIn('--plan', baseline)
+        self.assertNotIn('--reference-scene', baseline)
+        self.assertIn('--reference-scene', muse)
+        self.assertIn('--reference-scene', sam)
         self.assertEqual(sam[sam.index('--plan') + 1], '/outputs/muse/episode-000/plan.json')
         for flag in ('--seed', '--max-steps', '--action-steps', '--decision-steps'):
             self.assertEqual(baseline[baseline.index(flag) + 1], sam[sam.index(flag) + 1])

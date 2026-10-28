@@ -14,6 +14,7 @@ from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
 from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
 from inference.perception import tracking_records, video_part
+from core.observations import rgb_diagnostics
 
 MEMORY_PROMPT = '''Maintain explicit episode-local visual memory on every decide
 response. assessment reports phase (access/acquire/carry/locate_destination/place/
@@ -41,6 +42,16 @@ Use track around acquisition/carry/drop uncertainty, detect to find a destinatio
 or distinguish targets. status inspect has empty program and refreshes perception
 without moving; it consumes API/decision budget. If SAM is disabled, inspect may
 reassess RGB but cannot obtain SAM evidence. Empty updates are permitted.
+If sam_video_enabled is false, choose detect; video tracking is disabled for this
+run. Inspection refreshes sensors at the same pose without advancing physics;
+it does not explore a new area. Never claim inspection alone moved the camera
+or revealed a new vantage point. A missing object is occluded/uncertain unless temporal
+evidence supports a drop; do not assert loss solely because it left the frame.
+When grasp is supported and the correct destination is visible, switch phase to
+place and use a catalog-style placement instruction such as "Place the yellow
+pitcher on the dining counter." Do not keep requesting acquisition from its old
+source. Use the reduced decision_step_limit to observe approach and retention
+frequently. Do not declare placement from destination visibility alone.
 
 When current views are insufficient, navigate(fixture="sink", steps=30) requests
 a bounded GR00T NavigateKitchen burst to an observed/remembered fixture, keeping
@@ -240,6 +251,10 @@ class Supervisor:
             if (f'current:{key}' not in images or clip.dtype != np.uint8 or clip.ndim != 4
                     or not 1 <= len(clip) <= 8 or clip.shape[1:] != images[f'current:{key}'].shape):
                 raise ValueError('Invalid supervisor clip')
+        diagnostics = rgb_diagnostics(images)
+        for key, expected in context.get('image_diagnostics', {}).items():
+            if key not in diagnostics or diagnostics[key]['sha256'] != expected['sha256']:
+                raise ValueError('RGB checksum mismatch between simulator and supervisor')
         if operation == 'decide':
             validate_plan({'steps': [context['step']]})
         audit = []
@@ -259,7 +274,8 @@ class Supervisor:
             clip = clips.get(key[len('current:'):])
             if clip is not None and len(context.get('clip_steps', [])) != len(clip):
                 raise ValueError('Clip samples must have matching simulator-step labels')
-            tracking = query.get('mode') == 'track' and clip is not None and len(clip) >= 2
+            tracking = (context.get('sam_video_enabled', True) and query.get('mode') == 'track'
+                        and clip is not None and len(clip) >= 2)
             media = video_part(clip) if tracking else image_part(frame)
             text, usage = self.api.response('sam-3.1', [
                 {'type': 'input_text', 'text': target}, media,
@@ -300,7 +316,8 @@ class Supervisor:
             validate_plan(result)
         else:
             validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'])
-        return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding}
+        return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
+                'received_image_diagnostics': diagnostics}
 
 
 def make_handler(supervisor):
@@ -332,7 +349,7 @@ def make_handler(supervisor):
                 self.reply(404, {'error': 'unknown endpoint'})
                 return
             try:
-                self.connection.settimeout(300)
+                self.connection.settimeout(480)
                 size = int(self.headers.get('Content-Length', '0'))
                 if not 0 < size <= MAX_BYTES:
                     raise ValueError('Invalid request size')

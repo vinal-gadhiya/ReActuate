@@ -48,6 +48,22 @@ class SceneMemoryTests(unittest.TestCase):
             memory.authorize_navigation('glass', 2)
         self.assertEqual(parse_program('navigate(fixture="sink", steps=4)')[0][0], 'navigate')
 
+    def test_fixture_can_be_revisited_after_leaving_current_view(self):
+        memory = SceneMemory()
+        observed = decision()
+        observed['assessment']['information_needed'] = 'Reobserve the source area.'
+        observed['memory_updates'] = [{'name': 'kitchen sink', 'kind': 'fixture', 'location': 'beside source counter',
+                                      'status': 'visible', 'evidence': 'Basin and faucet visible in left view.'}]
+        memory.update(observed, 0, 1)
+        observed['memory_updates'][0].update(status='uncertain', location='not currently resolved',
+                                             evidence='Sink no longer visible from the island.')
+        memory.update(observed, 420, 2)
+        memory.authorize_navigation('kitchen sink', 6)
+        entry = memory.context()['entries'][0]
+        self.assertEqual(entry['last_seen_step'], 0)
+        self.assertEqual(entry['last_seen_location'], 'beside source counter')
+        self.assertIn('Basin', entry['last_seen_evidence'])
+
     def test_agent_cannot_bypass_navigation_guard_but_baseline_can_run_navigation_task(self):
         tools, events = FakeTools(), []
         replies = iter([decision(program='run_groot(instruction="Navigate to the sink.", steps=4)'), decision('stop', '')])
@@ -103,6 +119,18 @@ class SceneMemoryTests(unittest.TestCase):
                               lambda *args: decision('inspect', ''), lambda event: None)
         self.assertEqual(reason, 'perception_stall')
         self.assertEqual(tools.steps, 0)
+
+    def test_new_destination_evidence_shortens_burst_before_first_placement_motion(self):
+        tools, events = FakeTools(), []
+        placing = decision(program='run_groot(instruction="Place pitcher on dining counter.", steps=20)')
+        placing['assessment'].update(phase='carry', held_object='pitcher', grasp='supported', destination='dining counter')
+        placing['memory_updates'] = [{'kind': 'fixture', 'name': 'dining counter', 'status': 'visible',
+                                     'location': 'under held pitcher', 'evidence': 'Island top visible below pitcher.'}]
+        replies = iter([placing, decision('stop', '')])
+        run_subtasks(tools, [step('transfer', 'place pitcher')], 'agent', lambda *args: next(replies), events.append,
+                     subtask_budget_mode='episode', placement_burst_steps=8)
+        self.assertEqual(tools.steps, 8)
+        self.assertTrue(any(event['event'] == 'bounded_execution' for event in events))
 
     def test_tracking_ids_and_frames_are_preserved_and_bad_records_rejected(self):
         text = ('<1f>7<|box;x1=1;y1=1;x2=4;y2=3;w=6;h=4|>'

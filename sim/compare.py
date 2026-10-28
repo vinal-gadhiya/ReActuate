@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +28,9 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--plan', str(plan)]
     if condition != 'baseline':
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
+        command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
+    if getattr(args, 'sam_video', False):
+        command += ['--sam-video']
     return command
 
 
@@ -76,6 +80,9 @@ def summarize(rows):
         if len(matched) == len(CONDITIONS):
             goals_match = len({row['original_goal'] for row in matched.values()}) == 1
             pairs.append({'seed': seed, 'original_goals_match': goals_match,
+                          'scene_identities_match': len({json.dumps(row.get('scene_identity'), sort_keys=True)
+                                                         for row in matched.values()}) == 1
+                          if all(row.get('scene_identity') for row in matched.values()) else None,
                           'success': {key: bool(row['success']) for key, row in matched.items()}})
     return {'conditions': summary, 'paired_seeds': pairs}
 
@@ -83,7 +90,8 @@ def summarize(rows):
 def save_report(output, rows):
     report = {'runs': rows, **summarize(rows), 'limitations': [
         'Success is the original simulator task check; Muse subtask verdicts and SAM boxes are diagnostics only.',
-        'Scene seeds, horizon, and action chunk sizes match. Muse and SAM share the initial plan for each seed.',
+        'Explicit scene pairs, process seeds, and initial scene fingerprints are checked before supervised execution. '
+        'Muse and SAM share the initial plan for each seed.',
         'Scene seeds do not make stochastic policy/API outputs identical. Small samples do not establish improvement.',
         'SAM supplies candidate boxes to Muse, not 3D control or a new GR00T skill.',
         'Replans may diverge. Errors are reported separately and are not counted as completed task failures.',
@@ -113,6 +121,7 @@ def main():
     parser.add_argument('--max-api-calls', type=int, default=200)
     parser.add_argument('--max-replans', type=int, default=2)
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
+    parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
     parser.add_argument('--max-steps', type=int)
     parser.add_argument('--context-file', type=Path)
     parser.add_argument('--policy-url', default='http://inference:8000')
@@ -139,7 +148,8 @@ def main():
             output.parent.mkdir(parents=True, exist_ok=True)
             with (output.parent / f'{condition}.log').open('w') as log:
                 # Child output is streamed to Docker logs and retained for failed runs too.
-                with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                child_env = {**os.environ, 'PYTHONHASHSEED': str(seed % (2**32))}
+                with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=child_env,
                                       text=True, bufsize=1) as process:
                     for line in process.stdout:
                         print(line, end='', flush=True)

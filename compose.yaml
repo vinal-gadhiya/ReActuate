@@ -10,6 +10,7 @@ services:
       META_MODEL: ${META_MODEL:-muse-spark-1.3}
       META_USE_SAM: ${META_USE_SAM:-0}
       META_MAX_OUTPUT_TOKENS: ${META_MAX_OUTPUT_TOKENS:-8192}
+      META_SAM_TIMEOUT: ${META_SAM_TIMEOUT:-180}
     networks: [robotics]
 
   inference:

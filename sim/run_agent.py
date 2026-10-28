@@ -14,7 +14,9 @@ from core.agent import parse_program, validate_decision, validate_plan
 from core.policy_http import PolicyClient, SupervisorClient
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
+from core.observations import check_rgb
 from sim.evaluate import make_policy_observation, validate_actions
+from sim.scene_checks import choose_layout_style, scene_fingerprint, seed_process, verify_scene
 
 
 def gripper_supported(env):
@@ -31,7 +33,8 @@ def gripper_supported(env):
 
 
 class EpisodeTools:
-    def __init__(self, env, observation, policy, metadata, video, max_steps, chunk_steps, allow_gripper=False):
+    def __init__(self, env, observation, policy, metadata, video, max_steps, chunk_steps, allow_gripper=False,
+                 artifact_directory=None):
         self.env, self.observation, self.policy, self.metadata, self.video = env, observation, policy, metadata, video
         self.max_steps, self.chunk_steps = max_steps, chunk_steps
         self.steps, self.success, self.ended = 0, False, False
@@ -40,6 +43,7 @@ class EpisodeTools:
         self.allow_gripper = allow_gripper and gripper_supported(env)
         self.camera = metadata['modalities']['video']['modality_keys'][0]
         self.frames = deque(maxlen=8)
+        self.artifact_directory = artifact_directory
         self.last_diagnostics = {}
         self.frames.append((0, {key: observation[key].copy() for key in metadata['modalities']['video']['modality_keys']}))
 
@@ -66,6 +70,8 @@ class EpisodeTools:
         applied = []
         limit = min(self.steps + steps, self.max_steps)
         while self.steps < limit and not self.done:
+            check_rgb({key: self.observation[key] for key in self.metadata['modalities']['video']['modality_keys']},
+                      self.artifact_directory, self.steps)
             inputs = make_policy_observation(self.observation, self.metadata, instruction=instruction)
             request_id = f'{self.run_id}:{self.steps}'
             inputs['__request_id'] = np.asarray(request_id)
@@ -96,10 +102,17 @@ class EpisodeTools:
     def navigate(self, fixture, steps):
         self.run_groot(f'Navigate to the {fixture}.', steps)
 
+    def refresh_observation(self):
+        wrapper = self.env.unwrapped
+        raw = wrapper.env._get_observations(force_update=True)
+        self.observation = wrapper.get_observation(raw)
+
     def perception_clip(self):
         frames = list(self.frames)
         current = {key: self.observation[key].copy() for key in self.metadata['modalities']['video']['modality_keys']}
-        if frames[-1][0] != self.steps:
+        if frames[-1][0] == self.steps:
+            frames[-1] = (self.steps, current)
+        else:
             frames.append((self.steps, current))
         frames = frames[-8:]
         return [step for step, _ in frames], {f'clip:{key}': np.stack([view[key] for _, view in frames]) for key in current}
@@ -136,7 +149,8 @@ def handoff_context(plan, index, history):
 
 
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
-                 subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4):
+                 subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
+                 placement_burst_steps=8):
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
     last_inspection, repeated_inspections = None, 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
@@ -175,6 +189,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             last_inspection = inspection
             if repeated_inspections >= 3:
                 return 'perception_stall'
+            if hasattr(tools, 'refresh_observation'):
+                tools.refresh_observation()
             continue
         if status == 'complete':
             if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
@@ -220,7 +236,15 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'recovery_unavailable'
             continue
         rejected = 0
+        motion_left = placement_burst_steps if mode == 'agent' and memory.near_destination() else decision_steps
         for name, arguments in commands:
+            if motion_left <= 0:
+                break
+            if arguments['steps'] > motion_left:
+                record({'event': 'bounded_execution', 'step': tools.steps,
+                        'reason': 'Short feedback interval while holding an object near its destination',
+                        'requested_steps': arguments['steps'], 'executed_step_limit': motion_left})
+                arguments = {**arguments, 'steps': motion_left}
             before = tools.steps
             getattr(tools, name)(**arguments)
             if mode == 'agent':
@@ -231,6 +255,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     memory.navigation_bursts += 1
                     memory.last_navigation = arguments['fixture'].casefold().strip()
             spent += tools.steps - before
+            motion_left -= tools.steps - before
             record({'event': 'tool', 'subtask': step['id'], 'tool': name, 'arguments': arguments,
                     'step_before': before, 'step_after': tools.steps,
                     'diagnostics': getattr(tools, 'last_diagnostics', {})})
@@ -266,11 +291,14 @@ def main():
     parser.add_argument('--max-replans', type=int, default=2)
     parser.add_argument('--max-navigation-bursts', type=int, default=6)
     parser.add_argument('--stall-bursts', type=int, default=4, help='Stationary bursts before requiring recovery; 0 disables')
+    parser.add_argument('--placement-burst-steps', type=int, default=8)
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
                         help='Agent only: enforce planned subtask ceilings, or use the remaining episode budget')
     parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
+    parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clip tracking; default uses images only')
+    parser.add_argument('--reference-scene', type=Path, help='Require matching baseline scene before executing actions')
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -283,6 +311,8 @@ def main():
         parser.error('--max-steps must be positive')
     if args.max_navigation_bursts < 0 or args.stall_bursts < 0:
         parser.error('Navigation and stall limits must be nonnegative')
+    if not 1 <= args.placement_burst_steps <= args.decision_steps:
+        parser.error('Placement burst steps must be 1..decision-steps')
     if args.mode == 'fixed' and args.plan is None:
         parser.error('fixed mode requires --plan')
     if args.mode == 'baseline' and args.plan is not None:
@@ -294,11 +324,14 @@ def main():
     if args.plan:
         starting_plan = validate_plan(json.loads(args.plan.read_text()))
 
+    seed_process(args.seed)
     import gymnasium as gym
     import imageio.v2 as imageio
     import robocasa
     from robocasa.utils.dataset_registry import ATOMIC_TASK_DATASETS, COMPOSITE_TASK_DATASETS
     from robocasa.utils.dataset_registry_utils import get_task_horizon
+    from robocasa.models.scenes import scene_registry
+    from robocasa.environments.kitchen.kitchen import REGISTERED_KITCHEN_ENVS
 
     if args.task not in ATOMIC_TASK_DATASETS and args.task not in COMPOSITE_TASK_DATASETS:
         parser.error('Unknown registered RoboCasa task')
@@ -309,7 +342,7 @@ def main():
         raise ValueError('A PandaOmron policy is required')
     if args.action_steps > metadata['action_horizon']:
         parser.error('Action steps exceed policy horizon')
-    supervisor = SupervisorClient(args.supervisor_url, timeout=300) if args.mode == 'agent' else None
+    supervisor = SupervisorClient(args.supervisor_url, timeout=480) if args.mode == 'agent' else None
     supervisor_metadata = supervisor.metadata() if supervisor else None
     args.output.mkdir(parents=True, exist_ok=False)
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
@@ -337,18 +370,29 @@ def main():
                 stream.write(json.dumps(event) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
         try:
+            seed_process(args.seed + episode)
+            task_class = REGISTERED_KITCHEN_ENVS[args.task]
+            pairs = list(zip(range(1, 11), range(1, 11))) if args.split == 'target' else [
+                (layout, style) for layout in scene_registry.unpack_layout_ids(-2)
+                for style in scene_registry.unpack_style_ids(-2)]
+            pair = choose_layout_style(pairs, task_class.EXCLUDE_LAYOUTS, task_class.EXCLUDE_STYLES, args.seed + episode)
             env = gym.make(
-                f'robocasa/{args.task}', robots='PandaOmron', split=args.split, seed=args.seed + episode,
+                f'robocasa/{args.task}', robots='PandaOmron', split=None, seed=args.seed + episode,
+                obj_instance_split=args.split, layout_and_style_ids=[pair],
                 camera_widths=metadata['camera_width'], camera_heights=metadata['camera_height'],
             )
             observation, _ = env.reset(seed=args.seed + episode)
             goal = str(observation['annotation.human.task_description'])
             camera_keys = metadata['modalities']['video']['modality_keys']
+            scene = scene_fingerprint(env, observation, camera_keys)
+            (directory / 'scene.json').write_text(json.dumps(scene, indent=2) + '\n')
+            if args.reference_scene:
+                verify_scene(scene, json.loads(args.reference_scene.read_text()))
             api_calls, request_number = 0, 0
             previous_images = None
 
@@ -362,8 +406,9 @@ def main():
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
                 clip_steps, clips = tools.perception_clip()
                 # Clips are supplied only when SAM is enabled, not to the policy.
-                if args.sam is True or (args.sam is None and supervisor_metadata['sam_enabled']):
+                if args.sam_video and (args.sam is True or (args.sam is None and supervisor_metadata['sam_enabled'])):
                     images.update(clips)
+                quality = check_rgb(current, directory, tools.steps)
                 references = []
                 for number, (label, frame) in enumerate(sorted(images.items())):
                     if label.startswith('clip:'):
@@ -387,6 +432,7 @@ def main():
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
                     'last_motion': tools.last_diagnostics,
+                    'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'navigate': memory.navigation_bursts < args.max_navigation_bursts,
@@ -419,7 +465,8 @@ def main():
 
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
                 video.append_data(observation[camera_keys[0]])
-                tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps, args.allow_gripper)
+                tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps,
+                                     args.allow_gripper, directory)
                 simulator_context = build_simulator_context(
                     args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
                     ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
@@ -436,6 +483,8 @@ def main():
                 (directory / 'plan.json').write_text(json.dumps({'steps': plan}, indent=2) + '\n')
 
                 def decide(active_plan, index, spent, limit):
+                    if memory.near_destination():
+                        limit = min(limit, args.placement_burst_steps)
                     return ask('decide', {
                         'step': active_plan[index], 'subtask_steps_used': spent,
                         'completed_steps': active_plan[:index], 'remaining_steps': active_plan[index + 1:],
@@ -449,12 +498,14 @@ def main():
                     args.decision_steps, args.max_decisions, args.max_replans,
                     args.subtask_budget_mode,
                     memory, args.max_navigation_bursts, args.stall_bursts,
+                    args.placement_burst_steps,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
                     'success': tools.success, 'stop_reason': reason, 'steps': tools.steps,
                     'api_calls': api_calls, 'wall_seconds': time.monotonic() - started,
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
+                    'scene_identity': scene['identity'],
                 }
                 (directory / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 results.append(result)

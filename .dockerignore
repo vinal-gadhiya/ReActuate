@@ -6,6 +6,7 @@
 !sim/evaluate.py
 !sim/run_agent.py
 !sim/compare.py
+!sim/scene_checks.py
 !inference/
 !inference/Dockerfile
 !inference/Dockerfile.supervisor

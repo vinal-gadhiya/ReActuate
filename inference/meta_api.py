@@ -13,8 +13,8 @@ from PIL import Image
 
 def image_part(frame):
     stream = BytesIO()
-    Image.fromarray(frame).save(stream, format='JPEG', quality=85)
-    return {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + base64.b64encode(stream.getvalue()).decode()}
+    Image.fromarray(frame).save(stream, format='PNG')
+    return {'type': 'input_image', 'image_url': 'data:image/png;base64,' + base64.b64encode(stream.getvalue()).decode()}
 
 
 class MetaAPIError(RuntimeError):
@@ -45,6 +45,9 @@ class MetaAPI:
             raise RuntimeError('MODEL_API_KEY is not set in the supervisor container')
         self.base_url = os.environ.get('META_BASE_URL', 'https://api.meta.ai/v1').rstrip('/')
         self.timeout = timeout
+        self.sam_timeout = int(os.environ.get('META_SAM_TIMEOUT', '180'))
+        if not 1 <= self.sam_timeout <= 240:
+            raise ValueError('META_SAM_TIMEOUT must be 1–240 seconds')
         self.max_output_tokens = int(os.environ.get('META_MAX_OUTPUT_TOKENS', '8192'))
         if not 1024 <= self.max_output_tokens <= 16384:
             raise ValueError('META_MAX_OUTPUT_TOKENS must be 1024–16384')
@@ -71,7 +74,7 @@ class MetaAPI:
             headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'},
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with urlopen(request, timeout=self.sam_timeout if model == 'sam-3.1' else self.timeout) as response:
                 raw = response.read(8 * 1024 * 1024 + 1)
         except HTTPError as error:
             detail = error.read(4096).decode('utf-8', errors='replace')
@@ -79,8 +82,11 @@ class MetaAPI:
             detail = re.sub(r'data:(?:image|video)/[^\s"\\]+', '[MEDIA]', detail)
             detail = re.sub(r'(?i)Bearer\s+[^\s"\\]+', 'Bearer [REDACTED]', detail)
             raise MetaAPIError(f'{model}: Meta HTTP {error.code}: {detail[:1200]}') from None
-        except (URLError, TimeoutError):
-            raise MetaAPIError(f'{model}: Meta request connection failed or timed out') from None
+        except TimeoutError:
+            timeout = self.sam_timeout if model == 'sam-3.1' else self.timeout
+            raise MetaAPIError(f'{model}: Meta request timed out after {timeout}s; no automatic retry') from None
+        except URLError:
+            raise MetaAPIError(f'{model}: Meta request connection failed; no automatic retry') from None
         if len(raw) > 8 * 1024 * 1024:
             raise RuntimeError('Meta response exceeds size limit')
         response = json.loads(raw)

@@ -75,7 +75,9 @@ class SceneMemory:
             old = self.entries.get(key, {})
             last_seen = step if entry['status'] == 'visible' else old.get('last_seen_step')
             self.entries[key] = {**deepcopy(entry), 'observation_step': step, 'request': request,
-                                 'last_seen_step': last_seen}
+                                 'last_seen_step': last_seen,
+                                 'last_seen_location': entry['location'] if entry['status'] == 'visible' else old.get('last_seen_location'),
+                                 'last_seen_evidence': entry['evidence'] if entry['status'] == 'visible' else old.get('last_seen_evidence')}
         # Old records remain time-stamped claims, not current ground truth.
         if len(self.entries) > 48:
             oldest = sorted(self.entries, key=lambda key: self.entries[key]['observation_step'])
@@ -96,8 +98,8 @@ class SceneMemory:
                          r'stove|hood|toaster|electric kettle|stand mixer)\b', fixture.casefold()):
             raise ValueError('Navigation target must name a catalog-supported fixture, not a position or object')
         record = self.entries.get(('fixture', fixture.casefold().strip()))
-        if record is None or record['status'] not in ('visible', 'occluded'):
-            raise ValueError('Navigation requires a fixture recorded with visual evidence')
+        if record is None or record.get('last_seen_step') is None:
+            raise ValueError('Navigation requires a fixture with current or preserved historical visual evidence')
         if not self.assessment or not self.assessment['information_needed'].strip():
             raise ValueError('Navigation requires an explicit information need')
         if self.navigation_bursts >= limit:
@@ -109,3 +111,11 @@ class SceneMemory:
         stationary = diagnostics.get('stationary', False)
         self.stall_streak = self.stall_streak + 1 if stationary else 0
         self.last_instruction = instruction
+
+    def near_destination(self):
+        if not self.assessment or self.assessment['grasp'] != 'supported':
+            return False
+        destination = self.assessment['destination'].casefold().strip()
+        return self.assessment['phase'] == 'place' or any(
+            entry['name'].casefold().strip() == destination and entry['status'] == 'visible'
+            for entry in self.entries.values())
