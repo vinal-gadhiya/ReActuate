@@ -1,8 +1,24 @@
 """Public simulator/capability context; never inspect task-private object state."""
 
 import json
+from pathlib import Path
 
-CONTEXT_VERSION = 1
+CONTEXT_VERSION = 2
+
+
+def load_atomic_task_catalog(registered_tasks=()):
+    """Pinned public description templates, with coverage checked against the runtime registry."""
+    catalog = json.loads(Path(__file__).with_name('atomic_task_catalog.json').read_text())
+    tasks = catalog['tasks']
+    names = [task['name'] for task in tasks]
+    if len(names) != len(set(names)) or any(not task['description'].strip() for task in tasks):
+        raise ValueError('Atomic instruction catalog contains duplicate or empty entries')
+    missing = sorted(set(registered_tasks) - set(names))
+    if missing:
+        raise ValueError(f'Atomic instruction catalog does not cover registered tasks: {missing}')
+    return catalog
+
+
 SIMULATOR_GUIDE = {
     'simulator': 'RoboCasa kitchen manipulation on MuJoCo',
     'robot': {
@@ -26,7 +42,7 @@ SIMULATOR_GUIDE = {
         'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',
         'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
         'Use observable stopping conditions: lift-and-move evidence is stronger than gripper closure alone.',
-        'Subtask max_steps values are ceilings; episode, decision, and API limits may stop execution earlier.',
+        'Subtask max_steps are ceilings in plan budget mode and advisory in episode mode; episode, decision, and API limits still apply.',
     ],
 }
 
@@ -52,13 +68,25 @@ def load_operator_context(path):
 
 
 def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gripper, operator_context):
+    atomic_tasks = sorted(atomic_tasks)
+    catalog = load_atomic_task_catalog(atomic_tasks)
     return {
         'version': CONTEXT_VERSION, 'guide': SIMULATOR_GUIDE,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {
-            'registered_atomic_task_names': sorted(atomic_tasks),
+            'registered_atomic_task_names': atomic_tasks,
             'meaning': 'Task-category vocabulary only, not tools, scene entities, or verified GR00T competencies.',
+            'instruction_catalog': {
+                'upstream_ref': catalog['upstream_ref'],
+                'source': catalog['description_source'],
+                'description_kind': catalog['description_kind'],
+                'tasks': [{key: entry[key] for key in ('name', 'category', 'description')}
+                          for entry in catalog['tasks']],
+                'usage': 'Use these task-level sentence patterns for policy instructions; bind object/source/destination '
+                         'to the actual goal and scene. Preserve full object transfers. Templates are not executable tools '
+                         'or evidence of checkpoint competence. Exact demonstration annotations may differ.',
+            },
         },
         'cameras': [{
             'key': key, 'role': 'wrist camera' if 'eye_in_hand' in key else 'external robot camera',

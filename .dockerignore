@@ -13,5 +13,6 @@
 !inference/requirements.txt
 !core/
 !core/*.py
+!core/*.json
 !tests/
 !tests/*.py

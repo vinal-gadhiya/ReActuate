@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from core.simulator_context import build_simulator_context, load_operator_context
+from core.simulator_context import build_simulator_context, load_atomic_task_catalog, load_operator_context
 
 
 class SimulatorContextTests(unittest.TestCase):
@@ -22,7 +22,21 @@ class SimulatorContextTests(unittest.TestCase):
         self.assertNotIn('objects', context)
         self.assertNotIn('object_poses', context)
         self.assertIn('not independently verified', context['operator_context']['source'])
+        self.assertEqual(len(context['policy_reference']['instruction_catalog']['tasks']), 65)
         json.dumps(context)
+
+    def test_pinned_catalog_covers_all_atomic_descriptions_and_rejects_unknown_task(self):
+        catalog = load_atomic_task_catalog()
+        tasks = {task['name']: task for task in catalog['tasks']}
+        self.assertEqual(len(tasks), 65)
+        self.assertEqual(catalog['upstream_ref'], '4f8a2980def75a55dff96b990745b83540425f09')
+        self.assertTrue(all(task['description'].strip() for task in tasks.values()))
+        self.assertEqual(tasks['MakeIcedCoffee']['description'],
+                         'Pick up an ice cube and place it in the glass of coffee.')
+        self.assertEqual(tasks['OpenFridge']['description'], 'Open the fridge door(s).')
+        self.assertIn('MIT License', catalog['upstream_license'])
+        with self.assertRaisesRegex(ValueError, 'does not cover'):
+            load_atomic_task_catalog(['FutureTaskWithoutDescription'])
 
     def test_operator_context_validation(self):
         self.assertEqual(load_operator_context(None), {})

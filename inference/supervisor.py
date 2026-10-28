@@ -11,6 +11,7 @@ import numpy as np
 
 from core.agent import DECISION_SCHEMA, PLAN_SCHEMA, validate_decision, validate_plan
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
+from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
 
 PLAN_PROMPT = '''You plan short-horizon instructions for a frozen PandaOmron GR00T
@@ -38,6 +39,33 @@ open if one provides sufficient access. Release a handle and move clear when
 needed for the next goal. If access is uncertain, include an inspection/access
 goal using supported actions; do not invent an object position.
 GR00T can fail. Do not assume that an executable plan guarantees success.'''
+
+INSTRUCTION_PROMPT = '''Ground every planned step.instruction and every
+run_groot instruction in the supplied atomic_instruction_catalog descriptions.
+Select the closest task-level sentence pattern and preserve its verbs and object
+transfer structure. Resolve placeholders such as [food], [kitchen location],
+{left/right}, or "the item" using the original goal and observed evidence.
+Do not emit unresolved placeholders. Do not change the requested object, source,
+destination, or relation just to match an example. When adapting a pattern to a
+new source/destination, treat execution ability as unverified, not a trained fact.
+
+Use a complete pick-and-place transfer as one policy goal, for example:
+"Pick up the lemon wedge from the fridge shelf and place it in the glass of lemonade."
+"Pick up one ice cube and place it in the glass of lemonade."
+The lemon sentence is an adaptation, not a claim that an exact atomic task exists.
+Do not decompose these into separate reach, align, close, lift, and retreat
+instructions. For fridge access, follow the catalog's "Open the fridge door(s)."
+pattern and bind door references only when supported by observations.
+Keep detailed verification criteria and recovery reasoning in success_criteria,
+evidence, and handoff, rather than appending motor-control narration to the policy
+instruction. Do not invent unsupported policy skills such as "recenter the wrist",
+"shift the gripper left", "look at the lemon", or "drive the base backward".
+Preserve an active task-level instruction across bursts while inspecting progress;
+do not paraphrase it at each decision. Recovery instructions must also use catalog
+task-level patterns. If no suitable supported action exists, replan or stop with
+the limitation instead of pretending arbitrary language is a motion controller.
+These public documentation templates ground wording; they are not exact training
+annotations, new tools, guaranteed competencies, or a list of present objects.'''
 
 CONTEXT_PROMPT = '''Use simulator_context as the description of this harness and
 its tool limits. The task's original_goal is authoritative. Atomic-task names are
@@ -86,13 +114,13 @@ if a concrete recovery is justified, or stop. Never mark an unfinished step done
 Repeated paraphrases of the same failed command are not a new recovery strategy.
 When recent images show no progress, consider a distinct observable prerequisite
 such as releasing a handle or reacquiring the target, using only actual tools.
-Prefer concise task-like policy instructions over joint-level narration. Preserve
+Prefer catalog task-like policy instructions over joint-level narration. Preserve
 a useful instruction across bursts instead of rewriting it merely for variety.
 If no supported recovery exists, state that limitation rather than inventing one.
 
 For continue, write a short Python-looking program containing only 1–3 literal
 calls, with keyword arguments. It is parsed, never executed as arbitrary Python:
-run_groot(instruction="a short grounded instruction", steps=40)
+run_groot(instruction="Open the fridge door.", steps=40)
 set_gripper(closed=False, steps=5)
 The second tool exists ONLY if capabilities explicitly allow it. Do not open a
 gripper holding an object without considering the task. Total program steps must
@@ -119,6 +147,12 @@ def sam_boxes(text, width, height):
 class Supervisor:
     def __init__(self, api, model, use_sam=False):
         self.api, self.model, self.use_sam = api, model, use_sam
+        catalog = load_atomic_task_catalog()
+        self.instruction_catalog = {
+            'upstream_ref': catalog['upstream_ref'], 'source': catalog['description_source'],
+            'description_kind': catalog['description_kind'],
+            'tasks': [{key: task[key] for key in ('name', 'category', 'description')} for task in catalog['tasks']],
+        }
 
     def handle(self, operation, context, images):
         remaining = context.get('api_calls_left', 0)
@@ -149,10 +183,22 @@ class Supervisor:
                 'boxes': sam_boxes(text, frame.shape[1], frame.shape[0]),
                 'note': 'SAM candidates only; masks are retained in the API audit output.',
             }
-        content = [{'type': 'input_text', 'text': json.dumps({'context': context, 'sam': grounding})}]
+        # The server supplies its checked-in catalog even for older clients.
+        # Remove the duplicate from the scene context to send each template once.
+        model_context = dict(context)
+        if isinstance(context.get('simulator_context'), dict):
+            scene = dict(context['simulator_context'])
+            reference = dict(scene.get('policy_reference', {}))
+            reference.pop('instruction_catalog', None)
+            scene['policy_reference'] = reference
+            model_context['simulator_context'] = scene
+        content = [{'type': 'input_text', 'text': json.dumps({
+            'context': model_context, 'sam': grounding,
+            'atomic_instruction_catalog': self.instruction_catalog,
+        })}]
         for name, frame in sorted(images.items()):
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
-        prompt = CONTEXT_PROMPT + '\n\n' + (PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT)
+        prompt = INSTRUCTION_PROMPT + '\n\n' + CONTEXT_PROMPT + '\n\n' + (PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT)
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
@@ -181,6 +227,9 @@ def make_handler(supervisor):
                 'status': 'ready', 'protocol_version': PROTOCOL_VERSION,
                 'model': supervisor.model, 'sam_enabled': supervisor.use_sam,
                 'api_base_url': supervisor.api.base_url,
+                'instruction_grounding': 'atomic-task-descriptions-v1',
+                'atomic_catalog_ref': supervisor.instruction_catalog['upstream_ref'],
+                'atomic_catalog_tasks': len(supervisor.instruction_catalog['tasks']),
             })
 
         def do_POST(self):

@@ -20,6 +20,12 @@ task-category references, and optional operator notes. It never queries hidden
 objects or task predicates. The simulator adds current robot measurements and
 remaining execution budgets to each request.
 
+`atomic_task_catalog.json` contains all 65 official atomic-task description
+templates from the pinned RoboCasa source, with task categories, source paths,
+provenance, and the upstream MIT notice. These are public documentation templates,
+not exact per-demonstration training annotations or promises of policy competence.
+The context loader checks coverage against the installed task registry.
+
 | Message | Required meaning |
 | --- | --- |
 | Observation | Schema version; run/episode/step IDs; simulated timestamp; instruction version; task instruction; RGB frames/camera IDs; proprioception; optional declared depth/calibration |

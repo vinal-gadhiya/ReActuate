@@ -214,6 +214,31 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(reply['api_calls'], 1)
         self.assertEqual(calls[0][0], 'test-model')
 
+    def test_catalog_is_sent_to_planning_and_execution_without_mutating_client_context(self):
+        requests = []
+
+        class FakeAPI:
+            def response(self, model, content, instructions=None, schema=None):
+                requests.append((json.loads(content[0]['text']), instructions))
+                result = {'steps': [step('a', 'open fridge')]} if len(requests) == 1 else decision()
+                return result, {'model': model}
+
+        supervisor = Supervisor(FakeAPI(), 'test-model')
+        context = {'api_calls_left': 2, 'simulator_context': {'policy_reference': {
+            'instruction_catalog': {'client_copy': True}, 'registered_atomic_task_names': ['OpenFridge']}},
+            'step': step('a', 'open fridge'), 'decision_step_limit': 40,
+            'capabilities': {'set_gripper': False}}
+        images = {'current:camera': np.zeros((4, 6, 3), dtype=np.uint8)}
+        supervisor.handle('plan', context, images)
+        supervisor.handle('decide', context, images)
+        for payload, prompt in requests:
+            tasks = payload['atomic_instruction_catalog']['tasks']
+            self.assertEqual(len(tasks), 65)
+            self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
+            self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
+            self.assertIn('Do not decompose these into separate reach', prompt)
+        self.assertEqual(context['simulator_context']['policy_reference']['instruction_catalog'], {'client_copy': True})
+
     def test_sam_override_controls_calls_and_forwards_boxes_to_muse(self):
         calls = []
 

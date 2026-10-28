@@ -56,6 +56,39 @@ independently verified observations. Keep hidden simulator annotations out of
 normal runs; disclose any oracle-assisted conditions separately. No extra API
 call is needed to supply this context.
 
+## Atomic instruction grounding
+
+The supervisor supplies all 65 official RoboCasa atomic-task description templates
+to Muse on every planning and decision request. The snapshot is stored in
+`core/atomic_task_catalog.json`, sourced from
+[the pinned description table](https://github.com/robocasa/robocasa/blob/4f8a2980def75a55dff96b990745b83540425f09/docs/atomic_tasks/atomic_task_attributes.js)
+and [task index](https://github.com/robocasa/robocasa/blob/4f8a2980def75a55dff96b990745b83540425f09/docs/atomic_tasks/atomic_task_index.js).
+All 65 names were checked against that revision's atomic dataset registry. The
+simulator also verifies that its registered atomic tasks have catalog entries,
+and saves the catalog reference in `simulator_context.json`. The supervisor
+metadata records the catalog revision, task count, and grounding strategy.
+
+Muse is instructed to preserve the catalog's task-level verbs and sentence
+patterns while binding objects, sources, destinations, and placeholders to the
+actual goal and observations. Complete object transfers remain one policy goal;
+the supervisor should keep that instruction stable across bursts, rather than
+generate separate wrist alignment, reaching, closing, and retreat instructions.
+Detailed progress checks and handoff conditions remain in verification fields.
+
+For example, the ice-to-coffee template can ground an ice-to-lemonade instruction
+without changing the goal to coffee. A lemon transfer from fridge to glass uses
+the same pick-and-place sentence structure, with its actual source/destination;
+it is an adaptation, not an existing atomic task or an established policy skill.
+If no supported recovery pattern fits, Muse must state the limitation instead of
+inventing a low-level motion tool. This is prompt grounding, not a guarantee that
+the model follows every instruction or the frozen policy can execute it.
+
+These public templates match the documentation table. They are not a fetched
+copy of every language annotation in the checkpoint's training datasets. Exact
+episode instructions may name sampled objects or have different wording.
+Regenerate plans after rebuilding both `supervisor` and `sim` to use this strategy;
+old plans are still accepted but retain their original instruction text.
+
 ## Containers
 
 - `sim`: owns the scene, task score, subtask execution budgets, and video recording.
