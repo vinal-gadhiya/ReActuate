@@ -14,12 +14,14 @@ class CompareTests(unittest.TestCase):
         args = SimpleNamespace(task='OpenCabinet', split='pretrain', action_steps=8,
                                decision_steps=40, max_decisions=90, max_api_calls=200,
                                max_replans=2, policy_url='http://inference:8000',
-                               supervisor_url='http://supervisor:8001', max_steps=600, context_file=None)
+                               supervisor_url='http://supervisor:8001', max_steps=600, context_file=None,
+                               subtask_budget_mode='episode')
         baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         sam = run_command(args, 'muse_sam', 3, Path('/outputs/sam'), Path('/outputs/muse/episode-000/plan.json'))
         self.assertIn('--no-sam', muse)
         self.assertIn('--sam', sam)
+        self.assertEqual(sam[sam.index('--subtask-budget-mode') + 1], 'episode')
         self.assertNotIn('--plan', baseline)
         self.assertEqual(sam[sam.index('--plan') + 1], '/outputs/muse/episode-000/plan.json')
         for flag in ('--seed', '--max-steps', '--action-steps', '--decision-steps'):
@@ -41,6 +43,7 @@ class CompareTests(unittest.TestCase):
             (path / 'result.json').write_text(json.dumps({'success': False}))
             events = [
                 {'event': 'decision', 'status': 'complete'},
+                {'event': 'transition_blocked'},
                 {'event': 'supervisor_response', 'wall_seconds': 2, 'sam': {'boxes': [{'x1': 1}]}},
                 {'event': 'supervisor_response', 'wall_seconds': 3, 'sam': {'boxes': []}},
             ]
@@ -48,6 +51,8 @@ class CompareTests(unittest.TestCase):
             metrics = episode_metrics(path)
             self.assertFalse(metrics['success'])
             self.assertEqual(metrics['subtasks_marked_complete'], 1)
+            self.assertEqual(metrics['blocked_handoffs'], 1)
+            self.assertEqual(metrics['accepted_handoffs'], 0)
             self.assertEqual(metrics['sam_calls'], 2)
             self.assertEqual(metrics['sam_calls_with_boxes'], 1)
             self.assertEqual(metrics['supervisor_wall_seconds'], 5)

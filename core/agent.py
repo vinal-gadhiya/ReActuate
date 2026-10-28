@@ -24,8 +24,16 @@ DECISION_SCHEMA = {
         'evidence': {'type': 'string'},
         'program': {'type': 'string'},
         'replacement_steps': {'type': 'array', 'items': STEP_SCHEMA},
+        'handoff': {
+            'type': 'object',
+            'properties': {
+                'readiness': {'type': 'string', 'enum': ['ready', 'blocked', 'uncertain', 'not_applicable']},
+                'evidence': {'type': 'string'},
+            },
+            'required': ['readiness', 'evidence'], 'additionalProperties': False,
+        },
     },
-    'required': ['status', 'evidence', 'program', 'replacement_steps'],
+    'required': ['status', 'evidence', 'program', 'replacement_steps', 'handoff'],
     'additionalProperties': False,
 }
 
@@ -104,6 +112,11 @@ def validate_decision(decision, max_steps=80, allow_gripper=False):
         raise ValueError('A decision needs observable evidence or an explicit uncertainty statement')
     if not isinstance(decision['program'], str) or not isinstance(decision['replacement_steps'], list):
         raise ValueError('Invalid program or replacement plan')
+    handoff = decision['handoff']
+    if (not isinstance(handoff, dict) or set(handoff) != {'readiness', 'evidence'}
+            or handoff['readiness'] not in ('ready', 'blocked', 'uncertain', 'not_applicable')
+            or not isinstance(handoff['evidence'], str) or not 0 < len(handoff['evidence'].strip()) <= 2000):
+        raise ValueError('A decision needs handoff readiness and supporting evidence')
     if status == 'continue':
         parse_program(decision['program'], max_steps, allow_gripper)
     elif decision['program'].strip():

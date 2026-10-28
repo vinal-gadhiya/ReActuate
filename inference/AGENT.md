@@ -294,11 +294,77 @@ the plan or a positive Muse verdict cannot mark a failed episode successful.
 Privileged object state and task predicates are not passed to Muse or GR00T.
 
 API calls, decisions, replans, per-subtask steps, per-program steps, and total
-episode steps are bounded independently. API output tokens are capped per call.
+episode steps are bounded independently in `--subtask-budget-mode plan` (the
+strict-budget option). In `--subtask-budget-mode episode` (the default), planned
+`max_steps` values are advisory: the active goal can use the remaining episode
+budget. Decision, API-call, replan, per-program, and episode limits still apply,
+and Muse may stop early or complete a goal on visual evidence. The comparison
+runner defaults to `episode` mode for both supervised conditions so a small
+planned subtask ceiling does not terminate one condition prematurely. Override
+with `sim.compare --subtask-budget-mode plan` to evaluate strict ceilings.
+Muse output tokens are capped per call; SAM uses its segmentation response format.
 The call budget is not a dollar cap; prices and input-token usage vary. API/model
 errors abort rather than silently spending on retries. A failed request may have
 been billed even when no usage record was returned. Keep exploratory budgets
 small until the account and task behavior are validated.
+
+## Investigate early stops and SAM errors
+
+In plan budget mode, a failed 600-step pick after a 330-step door opening can end
+the episode at 930 steps when Muse chooses `stop`. This is a subtask ceiling,
+not the simulator's 3000-step horizon. `episode` mode permits more attempts but
+cannot make a frozen policy execute a skill it has not learned. Inspect repetitive
+commands and videos before interpreting longer execution as better recovery.
+
+A completed SAM response with empty text means no matching region was found;
+it is recorded with empty boxes and still passed to Muse. Incomplete responses,
+refusals, HTTP failures, and timeouts remain errors. Upstream HTTP errors identify
+the model and include a bounded, credential-redacted diagnostic. There are no
+automatic retries or silent fallbacks to a Muse-only condition.
+
+Before recreating a failed supervisor, preserve its diagnostic:
+
+```bash
+sudo docker compose --profile agent logs --tail=100 supervisor
+```
+
+To retry SAM + Muse alone using a previous initial plan, reset the same seed into
+a new output directory:
+
+```bash
+sudo docker compose --profile agent run --rm sim \
+  python -m sim.run_agent \
+    --task MakeIceLemonade --mode agent --seed 0 --sam \
+    --subtask-budget-mode episode --max-decisions 90 --max-api-calls 200 \
+    --plan /outputs/lemonade-comparison-001/seed-0/muse/episode-000/plan.json \
+    --output /outputs/lemonade-sam-retry-001
+```
+
+This begins a new episode; it does not resume the old robot state. A new full
+comparison is required for matched results under the changed budget policy.
+
+## Access and subtask transitions
+
+The supervisor must provide structured `handoff.readiness` and supporting evidence
+with every decision. Before advancing a completed subtask to the next one, the
+runner requires `ready`. `blocked`, `uncertain`, and `not_applicable` cannot advance
+an intermediate subtask; they generate a `transition_blocked` event without motion
+and consume a supervisor decision. The supervisor can then continue access work
+or replan. This guard does not use privileged simulator state and cannot prevent
+an incorrect visual claim of readiness. Normal decision/API limits bound repeated
+rejected completions. The final subtask has no next-step handoff requirement.
+
+For a fridge-to-object sequence, the access criterion concerns the required
+shelf/object, rather than merely one open panel. It does not require both doors
+when one is sufficient. Release, reposition, and inspection can remain part of
+access work. If access is lost later, the supervisor may insert a new access
+prerequisite before the pending manipulation rather than treating all motion as
+a grasp attempt. Prior completion and handoff evidence remains available after
+the recent-history window rolls off, explicitly labeled as earlier model claims.
+
+`subtask_transition` trace events record accepted transitions; `decision` events
+record model claims, including claims rejected by the handoff guard. Rebuild both
+`supervisor` and `sim` after changing this shared decision contract.
 
 This is an initial experimental harness. It does not establish improved success
 rates, reliable subtask verification, or generalization; those require matched

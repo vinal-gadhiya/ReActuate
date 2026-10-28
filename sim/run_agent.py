@@ -90,11 +90,23 @@ class EpisodeTools:
             self.step(action)
 
 
-def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2):
+def handoff_context(plan, index, history):
+    """Keep accepted transition claims available after recent history rolls off."""
+    return {
+        'next_step': plan[index + 1] if index + 1 < len(plan) else None,
+        'accepted_handoffs': [event for event in history if event['event'] == 'subtask_transition'][-10:],
+        'handoff_rule': 'A prior handoff is a model claim at that time, not proof that access or grasp persists.',
+    }
+
+
+def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
+                 subtask_budget_mode='plan'):
     index, spent, decisions, replans = 0, 0, 0, 0
     while not tools.done and index < len(plan):
         step = plan[index]
-        remaining = min(step['max_steps'] - spent, tools.max_steps - tools.steps)
+        remaining = tools.max_steps - tools.steps
+        if mode != 'agent' or subtask_budget_mode == 'plan':
+            remaining = min(step['max_steps'] - spent, remaining)
         if mode != 'agent':
             if remaining <= 0:
                 record({'event': 'scheduled_transition', 'subtask': step['id'], 'verified': False, 'step': tools.steps})
@@ -118,6 +130,16 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         if status == 'stop':
             return 'supervisor_stop'
         if status == 'complete':
+            if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
+                record({'event': 'transition_blocked', 'subtask': step['id'],
+                        'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
+                        'reason': 'Next-step prerequisites have not been visually established.',
+                        'handoff': decision['handoff']})
+                continue
+            if mode == 'agent':
+                record({'event': 'subtask_transition', 'subtask': step['id'],
+                        'completed_step': dict(step), 'step': tools.steps,
+                        'completion_evidence': decision['evidence'], 'handoff': decision['handoff']})
             index, spent = index + 1, 0
             continue
         if status == 'replan':
@@ -164,6 +186,8 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
+                        help='Agent only: enforce planned subtask ceilings, or use the remaining episode budget')
     parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
@@ -226,7 +250,7 @@ def main():
                 event = {**event, 'program_path': filename}
             with (directory / 'trace.jsonl').open('a') as stream:
                 stream.write(json.dumps(event) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -261,6 +285,7 @@ def main():
                 context.update({
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
+                    'subtask_budget_mode': args.subtask_budget_mode,
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
                     'execution_limits': {
                         'step_unit': 'one executed environment control step, not seconds or API calls',
@@ -310,12 +335,14 @@ def main():
                         'step': active_plan[index], 'subtask_steps_used': spent,
                         'completed_steps': active_plan[:index], 'remaining_steps': active_plan[index + 1:],
                         'history': history[-8:], 'decision_step_limit': limit,
+                        **handoff_context(active_plan, index, history),
                         'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
                     })
 
                 reason = 'plan_only' if args.plan_only else run_subtasks(
                     tools, plan, args.mode, decide, record,
                     args.decision_steps, args.max_decisions, args.max_replans,
+                    args.subtask_budget_mode,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,

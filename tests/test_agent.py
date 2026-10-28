@@ -10,7 +10,7 @@ from core.agent import parse_program, validate_decision, validate_plan
 from inference.meta_api import output_text
 from inference.supervisor import Supervisor, sam_boxes
 from sim.evaluate import make_policy_observation
-from sim.run_agent import EpisodeTools, run_subtasks
+from sim.run_agent import EpisodeTools, handoff_context, run_subtasks
 
 
 def step(identifier, instruction):
@@ -20,7 +20,9 @@ def step(identifier, instruction):
 
 def decision(status='continue', program='run_groot(instruction="open cabinet", steps=4)', replacement=None):
     return {'status': status, 'evidence': 'Door remains closed in the current image.',
-            'program': program, 'replacement_steps': replacement or []}
+            'program': program, 'replacement_steps': replacement or [],
+            'handoff': {'readiness': 'ready' if status == 'complete' else 'not_applicable',
+                        'evidence': 'Shelf access is visible.' if status == 'complete' else 'No transition requested.'}}
 
 
 class FakeTools:
@@ -125,9 +127,67 @@ class AgentTests(unittest.TestCase):
                               lambda event: None, max_replans=0)
         self.assertEqual(reason, 'replan_budget')
 
+    def test_handoff_blocks_advancement_until_access_is_ready(self):
+        tools, events = FakeTools(), []
+        blocked = decision('complete', '')
+        blocked['handoff'] = {'readiness': 'blocked', 'evidence': 'One panel is open but the target shelf is obstructed.'}
+        replies = iter([
+            blocked,
+            decision(program='run_groot(instruction="open enough to access the shelf", steps=4)'),
+            decision('complete', ''),
+            decision(program='run_groot(instruction="pick lemon", steps=4)'),
+            decision('stop', ''),
+        ])
+        reason = run_subtasks(tools, [step('access', 'open fridge'), step('pick', 'pick lemon')],
+                              'agent', lambda *args: next(replies), events.append)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(tools.instructions, ['open enough to access the shelf', 'pick lemon'])
+        transitions = [event for event in events if event['event'] == 'subtask_transition']
+        self.assertEqual(len(transitions), 1)
+        self.assertEqual(transitions[0]['step'], 4)
+        self.assertEqual(sum(event['event'] == 'transition_blocked' for event in events), 1)
+
+    def test_handoff_context_retains_old_evidence_after_recent_history_rolls_off(self):
+        accepted = {'event': 'subtask_transition', 'subtask': 'access', 'step': 20,
+                    'completion_evidence': 'Shelf exposed.',
+                    'handoff': {'readiness': 'ready', 'evidence': 'Arm clear of door.'}}
+        history = [accepted] + [{'event': 'tool', 'step_after': index} for index in range(50)]
+        plan = [step('access', 'open fridge'), step('pick', 'pick lemon'), step('place', 'place lemon')]
+        context = handoff_context(plan, 1, history)
+        self.assertEqual(context['accepted_handoffs'], [accepted])
+        self.assertEqual(context['next_step']['id'], 'place')
+        self.assertIn('not proof', context['handoff_rule'])
+
     def test_duplicate_plan_ids_rejected(self):
         with self.assertRaises(ValueError):
             validate_plan({'steps': [step('a', 'open'), step('a', 'close')]})
+
+    def test_episode_budget_allows_recovery_past_planned_subtask_ceiling(self):
+        tools, limits = FakeTools(), []
+
+        def decide(plan, index, spent, limit):
+            limits.append(limit)
+            return decision(program=f'run_groot(instruction="open cabinet", steps={limit})')
+
+        reason = run_subtasks(tools, [step('a', 'open cabinet')], 'agent', decide,
+                              lambda event: None, decision_steps=8, subtask_budget_mode='episode')
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 30)
+        self.assertEqual(limits, [8, 8, 8, 6])
+
+    def test_plan_budget_preserves_zero_motion_completion_or_replan_checkpoint(self):
+        tools, limits = FakeTools(), []
+
+        def decide(plan, index, spent, limit):
+            limits.append(limit)
+            return decision('stop', '') if limit == 0 else decision(
+                program=f'run_groot(instruction="open cabinet", steps={limit})')
+
+        reason = run_subtasks(tools, [step('a', 'open cabinet')], 'agent', decide,
+                              lambda event: None, decision_steps=8)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(tools.steps, 10)
+        self.assertEqual(limits, [8, 2, 0])
 
     def test_meta_output_requires_completed_text(self):
         response = {'status': 'completed', 'output': [{'type': 'message', 'content': [

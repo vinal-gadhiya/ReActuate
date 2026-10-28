@@ -11,7 +11,7 @@ import numpy as np
 
 from core.agent import DECISION_SCHEMA, PLAN_SCHEMA, validate_decision, validate_plan
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
-from inference.meta_api import MetaAPI, image_part
+from inference.meta_api import MetaAPI, MetaAPIError, image_part
 
 PLAN_PROMPT = '''You plan short-horizon instructions for a frozen PandaOmron GR00T
 policy in RoboCasa. Decompose the original task into 1–10 physically meaningful,
@@ -31,6 +31,12 @@ not measured skill runtimes. The supervisor can finish early on visible evidence
 Budget conservatively within the episode horizon.
 Use the images to ground references; do not invent hidden objects or positions.
 The same scene continues across subtasks: no reset, teleport, or task swapping.
+For access prerequisites, write success criteria in terms of the next goal:
+the required shelf/object must be sufficiently exposed for the next manipulation,
+not merely one door panel ajar or a glimpse of shelves. Do not require all doors
+open if one provides sufficient access. Release a handle and move clear when
+needed for the next goal. If access is uncertain, include an inspection/access
+goal using supported actions; do not invent an object position.
 GR00T can fail. Do not assume that an executable plan guarantees success.'''
 
 CONTEXT_PROMPT = '''Use simulator_context as the description of this harness and
@@ -59,6 +65,30 @@ State visible evidence and uncertainty. A closed gripper does not prove a grasp;
 a partially open door may or may not meet the subtask criterion. SAM boxes identify
 candidate regions, not contact, 3D pose, or success. Do not infer success from a
 motion request, elapsed steps, or previous model claims alone.
+Every decision includes handoff: {readiness, evidence}. On complete, examine
+next_step as well as the current criterion. For a next manipulation inside a
+container, assess access to its required shelf/object, obstructing doors, and
+whether the arm must release a handle or reposition. One open panel alone is
+not proof of usable access; opening every panel is not automatically required.
+Use ready only with current visual support for the next goal's prerequisites.
+Use blocked or uncertain if they are unmet or unresolved. With a next_step,
+complete is rejected by the runner unless handoff.readiness is ready; instead
+continue access/inspection or replan to insert a prerequisite before the pending
+goal. Keep the full pending goal in replacement_steps and use new unique ids.
+For the final step or a non-complete decision, use not_applicable with a short
+explanation. accepted_handoffs preserve earlier claims, not permanent facts:
+if a door closes or access is lost, recover access before attempting the grasp.
+Read subtask_budget_mode. In episode mode, step.max_steps is advisory: spending
+that allowance does NOT exhaust the active subtask while episode/decision/API
+budgets remain. Do not stop solely because subtask_steps_used reaches max_steps.
+In plan mode, decision_step_limit can become zero: replan the remaining suffix
+if a concrete recovery is justified, or stop. Never mark an unfinished step done.
+Repeated paraphrases of the same failed command are not a new recovery strategy.
+When recent images show no progress, consider a distinct observable prerequisite
+such as releasing a handle or reacquiring the target, using only actual tools.
+Prefer concise task-like policy instructions over joint-level narration. Preserve
+a useful instruction across bursts instead of rewriting it merely for variety.
+If no supported recovery exists, state that limitation rather than inventing one.
 
 For continue, write a short Python-looking program containing only 1–3 literal
 calls, with keyword arguments. It is parsed, never executed as arbitrary Python:
@@ -168,6 +198,8 @@ def make_handler(supervisor):
                 images = decode_arrays(payload)
                 context = json.loads(images.pop('__context').item())
                 self.reply(200, supervisor.handle(self.path[1:], context, images))
+            except MetaAPIError as error:
+                self.reply(502, {'error': str(error)})
             except (ValueError, KeyError, SyntaxError) as error:
                 self.reply(400, {'error': str(error)})
             except Exception:

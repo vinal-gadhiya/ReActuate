@@ -4,7 +4,8 @@ import base64
 from io import BytesIO
 import json
 import os
-from urllib.error import HTTPError
+import re
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from PIL import Image
@@ -16,15 +17,22 @@ def image_part(frame):
     return {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + base64.b64encode(stream.getvalue()).decode()}
 
 
-def output_text(response):
+class MetaAPIError(RuntimeError):
+    """An upstream error with a bounded, credential-redacted diagnostic."""
+
+
+def output_text(response, allow_empty=False):
     if response.get('status') != 'completed':
         raise RuntimeError(f'Meta response did not complete: {response.get("status")}')
+    if any(part.get('type') == 'refusal' for item in response.get('output', [])
+           for part in item.get('content', [])):
+        raise RuntimeError('Meta returned a refusal')
     text = ''.join(
         part.get('text', '')
         for item in response.get('output', []) if item.get('type') == 'message'
         for part in item.get('content', []) if part.get('type') == 'output_text'
     )
-    if not text:
+    if not text and not allow_empty:
         raise RuntimeError('Meta returned no output text (possibly a refusal)')
     return text
 
@@ -40,8 +48,14 @@ class MetaAPI:
     def response(self, model, content, instructions=None, schema=None):
         body = {
             'model': model, 'input': [{'role': 'user', 'content': content}],
-            'store': False, 'max_output_tokens': 4096,
+            'store': False,
         }
+        # SAM returns segmentation records, not generated language. Keep Muse's
+        # generation cap out of segmentation requests.
+        if model != 'sam-3.1':
+            body['max_output_tokens'] = 4096
+        else:
+            body.pop('store')
         if instructions is not None:
             body['instructions'] = instructions
         if schema is not None:
@@ -56,12 +70,20 @@ class MetaAPI:
             with urlopen(request, timeout=self.timeout) as response:
                 raw = response.read(8 * 1024 * 1024 + 1)
         except HTTPError as error:
-            # Do not copy request headers/credentials into traces.
-            raise RuntimeError(f'Meta HTTP {error.code}; check model access, quota, and API configuration') from error
+            detail = error.read(4096).decode('utf-8', errors='replace')
+            detail = detail.replace(self.key, '[REDACTED]')
+            detail = re.sub(r'data:image/[^\s"\\]+', '[IMAGE]', detail)
+            detail = re.sub(r'(?i)Bearer\s+[^\s"\\]+', 'Bearer [REDACTED]', detail)
+            raise MetaAPIError(f'{model}: Meta HTTP {error.code}: {detail[:1200]}') from None
+        except (URLError, TimeoutError):
+            raise MetaAPIError(f'{model}: Meta request connection failed or timed out') from None
         if len(raw) > 8 * 1024 * 1024:
             raise RuntimeError('Meta response exceeds size limit')
         response = json.loads(raw)
-        text = output_text(response)
+        try:
+            text = output_text(response, allow_empty=model == 'sam-3.1')
+        except RuntimeError as error:
+            raise MetaAPIError(f'{model}: {error}') from error
         audit = {
             'response_id': response.get('id'), 'model': response.get('model', model),
             'usage': response.get('usage', {}), 'output': text,

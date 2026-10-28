@@ -25,12 +25,15 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--context-file', str(args.context_file)]
     if plan is not None:
         command += ['--plan', str(plan)]
+    if condition != 'baseline':
+        command += ['--subtask-budget-mode', args.subtask_budget_mode]
     return command
 
 
 def episode_metrics(directory):
     result = json.loads((directory / 'result.json').read_text())
     counts = {'decisions': 0, 'replans': 0, 'subtasks_marked_complete': 0,
+              'accepted_handoffs': 0, 'blocked_handoffs': 0,
               'sam_calls': 0, 'sam_calls_with_boxes': 0, 'supervisor_wall_seconds': 0.0}
     for line in (directory / 'trace.jsonl').read_text().splitlines():
         event = json.loads(line)
@@ -43,6 +46,10 @@ def episode_metrics(directory):
             if event.get('sam') is not None:
                 counts['sam_calls'] += 1
                 counts['sam_calls_with_boxes'] += int(bool(event['sam']['boxes']))
+        elif event['event'] == 'subtask_transition':
+            counts['accepted_handoffs'] += 1
+        elif event['event'] == 'transition_blocked':
+            counts['blocked_handoffs'] += 1
     return {**result, **counts}
 
 
@@ -100,6 +107,7 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=90)
     parser.add_argument('--max-api-calls', type=int, default=200)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--max-steps', type=int)
     parser.add_argument('--context-file', type=Path)
     parser.add_argument('--policy-url', default='http://inference:8000')
