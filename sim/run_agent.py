@@ -16,7 +16,7 @@ from core.simulator_context import build_simulator_context, load_operator_contex
 from core.scene_memory import SceneMemory
 from core.observations import check_rgb
 from sim.evaluate import make_policy_observation, validate_actions
-from sim.scene_checks import choose_layout_style, scene_fingerprint, seed_process, verify_scene
+from sim.scene_checks import choose_layout_style, reset_scene, scene_fingerprint, seed_process, verify_scene
 
 
 def gripper_supported(env):
@@ -386,13 +386,14 @@ def main():
                 obj_instance_split=args.split, layout_and_style_ids=[pair],
                 camera_widths=metadata['camera_width'], camera_heights=metadata['camera_height'],
             )
-            observation, _ = env.reset(seed=args.seed + episode)
+            reference_scene = json.loads(args.reference_scene.read_text()) if args.reference_scene else None
+            observation, _ = reset_scene(env, args.seed + episode, reference_scene)
             goal = str(observation['annotation.human.task_description'])
             camera_keys = metadata['modalities']['video']['modality_keys']
             scene = scene_fingerprint(env, observation, camera_keys)
             (directory / 'scene.json').write_text(json.dumps(scene, indent=2) + '\n')
-            if args.reference_scene:
-                verify_scene(scene, json.loads(args.reference_scene.read_text()))
+            if reference_scene is not None:
+                verify_scene(scene, reference_scene)
             api_calls, request_number = 0, 0
             previous_images = None
 

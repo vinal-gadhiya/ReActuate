@@ -13,11 +13,44 @@ from PIL import Image
 from core.observations import array_digest, check_rgb, rgb_diagnostics
 from inference.meta_api import image_part
 from inference.supervisor import Supervisor
-from sim.scene_checks import choose_layout_style, scene_fingerprint, seed_process, verify_scene
+from sim.scene_checks import choose_layout_style, reset_scene, scene_fingerprint, seed_process, verify_scene
 from sim.run_agent import EpisodeTools
 
 
 class SceneCheckTests(unittest.TestCase):
+    def test_reset_replays_only_reference_spawn_through_normal_reset(self):
+        calls = []
+        metadata = {'init_robot_base_pos': [1., 2., 0.], 'init_robot_base_ori': [0., 0., 0.],
+                    'object_cfgs': ['do not replay'], 'lang': 'do not replay'}
+        kitchen = SimpleNamespace(get_ep_meta=lambda: metadata,
+                                  set_ep_meta=lambda value: calls.append(('metadata', value)))
+        env = SimpleNamespace(unwrapped=SimpleNamespace(env=kitchen),
+                              reset=lambda seed: (calls.append(('reset', seed)) or ({'rgb': 'fresh'}, {})))
+        reference = {'initial_metadata': {**metadata, 'init_robot_base_pos': [3., 4., 0.]}}
+        observation, _ = reset_scene(env, 7, reference)
+        self.assertEqual(calls, [('reset', 7), ('metadata', {
+            'init_robot_base_pos': [3., 4., 0.], 'init_robot_base_ori': [0., 0., 0.]}), ('reset', 7)])
+        self.assertEqual(observation, {'rgb': 'fresh'})
+        self.assertEqual(metadata['init_robot_base_pos'], [1., 2., 0.])
+
+    def test_baseline_uses_same_spawn_replay_reset_path(self):
+        calls = []
+        metadata = {'init_robot_base_pos': [1., 2., 0.], 'init_robot_base_ori': [0., 0., 0.]}
+        kitchen = SimpleNamespace(get_ep_meta=lambda: metadata, set_ep_meta=lambda value: calls.append(value))
+        env = SimpleNamespace(unwrapped=SimpleNamespace(env=kitchen), reset=lambda seed: ({}, {}))
+        reset_scene(env, 0)
+        self.assertEqual(calls, [metadata])
+        with self.assertRaisesRegex(ValueError, 'regenerate the baseline'):
+            reset_scene(env, 0, {'identity': {}})
+
+    def test_mismatch_reports_metadata_fields_and_numeric_state_difference(self):
+        expected = {'identity': {'metadata_sha256': 'a', 'initial_state_sha256': 'a'},
+                    'initial_metadata': {'init_robot_base_pos': [1, 2, 0]}, 'initial_state': [0., 1., 2.]}
+        actual = {'identity': {'metadata_sha256': 'b', 'initial_state_sha256': 'b'},
+                  'initial_metadata': {'init_robot_base_pos': [2, 2, 0]}, 'initial_state': [0., 1.5, 2.]}
+        with self.assertRaisesRegex(ValueError, r'metadata.init_robot_base_pos.*state_max_abs_delta=0.5'):
+            verify_scene(actual, expected)
+
     def test_fixed_scene_selection_is_independent_of_global_rng_and_respects_exclusions(self):
         pairs = [(1, 1), (11, 14), (15, 14), (40, 34)]
         selected = choose_layout_style(pairs, [1], [34], 3)

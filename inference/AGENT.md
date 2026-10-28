@@ -393,15 +393,23 @@ The comparison runner fixes `PYTHONHASHSEED` for child processes. The simulator
 seeds Python and NumPy and selects an explicit valid layout/style pair from the
 requested split, applying the task's exclusions. It uses that singleton pair and
 preserves the requested object-instance split when constructing RoboCasa.
+All conditions then use the same spawn replay reset path: baseline records its
+sampled mobile-base position/orientation, and supervised runs supply that pose
+to RoboCasa's normal reset. Controllers and physics settling still initialize
+normally; simulator joint state is not copied over a mismatching reset.
 
 Every episode saves `scene.json`: layout/style, instruction, hashes of initial
 episode metadata, model XML, and rounded simulator state, plus initial RGB hashes.
+It also saves the initial metadata and numeric state for mismatch diagnosis.
 Supervised conditions must match the baseline fingerprint before any actions or
 Meta requests. A mismatch aborts the comparison rather than silently comparing
 different scenes. The fingerprint is privileged evaluation metadata and is never
 sent to the supervisor or policy. It does not seed stochastic GR00T/API sampling
 or prove identical GPU-rendered pixels. Old results without scene fingerprints
 cannot establish matched conditions. Use new output directories after this change.
+References created before spawn metadata was saved must be regenerated. A
+remaining mismatch reports changed metadata fields, maximum state delta, and
+the first changed state indices; inspect both conditions' `scene.json` values.
 
 Raw RGB arrays are checksummed in the simulator and verified after transport in
 the supervisor. API image inputs use lossless PNG. `received_image_diagnostics`
