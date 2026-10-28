@@ -141,7 +141,7 @@ working GR00T image, downloaded checkpoint, and simulator asset volume.
 ## 3. Start services
 
 ```bash
-sudo docker compose --profile agent up -d inference supervisor
+sudo docker compose --profile agent up -d --wait inference supervisor
 sudo docker compose --profile agent logs -f supervisor
 ```
 
@@ -288,6 +288,13 @@ For each scene seed, the comparison runs these conditions sequentially:
 3. `muse_sam`: the same initial plan as `muse`, plus adaptive SAM image detection
    at decision boundaries. Add `--sam-video` to `sim.compare` to opt into clip
    tracking. Later decisions and replans can differ.
+
+The runner checks both services' metadata before starting the baseline. This
+does not call Meta or execute policy inference. Building an image and running
+the disposable unit-test container do not start the persistent supervisor.
+Use the `up -d --wait` command above before a comparison; it also starts a
+missing service or recreates a service when its image has changed. If health
+fails, inspect `sudo docker compose --profile agent logs --tail=80 inference supervisor`.
 
 The task split, seed, episode horizon, and GR00T action chunk length match across
 conditions. Direct gripper intervention is disabled in all conditions. Each agent

@@ -5,11 +5,30 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+from urllib.error import URLError
 
-from sim.compare import episode_metrics, run_command, summarize
+from sim.compare import check_services, episode_metrics, run_command, summarize
 
 
 class CompareTests(unittest.TestCase):
+    def test_missing_supervisor_fails_preflight_with_startup_instructions(self):
+        with patch('sim.compare.PolicyClient.metadata', return_value={'protocol_version': 1}), \
+                patch('sim.compare.SupervisorClient.metadata', side_effect=URLError('name resolution failed')):
+            with self.assertRaises(SystemExit) as failure:
+                check_services('http://inference:8000', 'http://supervisor:8001')
+        message = str(failure.exception)
+        self.assertIn('before any rollout', message)
+        self.assertIn('supervisor (http://supervisor:8001)', message)
+        self.assertIn('up -d --wait inference supervisor', message)
+
+    def test_preflight_checks_both_services_without_any_policy_or_meta_inference(self):
+        with patch('sim.compare.PolicyClient.metadata', return_value={'protocol_version': 1}) as policy, \
+                patch('sim.compare.SupervisorClient.metadata', return_value={'protocol_version': 1}) as supervisor:
+            check_services('http://inference:8000', 'http://supervisor:8001')
+        policy.assert_called_once_with()
+        supervisor.assert_called_once_with()
+
     def test_sam_condition_reuses_plan_and_identical_control_settings(self):
         args = SimpleNamespace(task='OpenCabinet', split='pretrain', action_steps=8,
                                decision_steps=40, max_decisions=90, max_api_calls=200,

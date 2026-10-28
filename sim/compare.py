@@ -7,8 +7,31 @@ from pathlib import Path
 import subprocess
 import sys
 
+from core.policy_http import PolicyClient, SupervisorClient
+
 
 CONDITIONS = ('baseline', 'muse', 'muse_sam')
+
+
+def check_services(policy_url, supervisor_url):
+    """Check local service metadata before spending a baseline rollout budget."""
+    errors = []
+    for name, client in (
+        ('inference', PolicyClient(policy_url, timeout=10)),
+        ('supervisor', SupervisorClient(supervisor_url, timeout=10)),
+    ):
+        try:
+            client.metadata()
+        except (OSError, RuntimeError, ValueError) as error:
+            errors.append(f'{name} ({client.url}): {error}')
+    if errors:
+        raise SystemExit(
+            'Comparison service preflight failed before any rollout:\n' + '\n'.join(errors)
+            + '\nOn Thor, start the services and wait for health:\n'
+            'sudo docker compose --profile agent up -d --wait inference supervisor\n'
+            'If startup fails, inspect: sudo docker compose --profile agent logs --tail=80 inference supervisor\n'
+            'Building images or running the disposable test container does not start the supervisor service.'
+        )
 
 
 def run_command(args, condition, seed, output, plan=None):
@@ -135,6 +158,7 @@ def main():
         parser.error('Invalid execution budgets')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
+    check_services(args.policy_url, args.supervisor_url)
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / 'experiment.json').write_text(json.dumps(
         {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}, indent=2) + '\n')
