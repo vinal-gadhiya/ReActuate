@@ -13,6 +13,12 @@ policy clients, rollout recording, task scoring, and experiment execution.
 - `compare.py`: sequential comparisons of GR00T, Muse, and Muse + SAM on matched
   scene seeds, with videos, traces, and aggregated task-success and latency results.
 
+Agent episodes retain semantic object memory across decisions and replans. Muse
+can request perception without motion, select a camera/target for SAM detection
+or clip tracking, and request bounded fixture navigation before resuming a pending
+transfer. Motion diagnostics compare declared robot measurements and rendered
+images; they do not query private object poses or certify task progress.
+
 Assets use `robocasa-thor-assets:/opt/robocasa-assets`; generated artifacts go
 under ignored `outputs/`. Keep model weights and API credentials out of this image.
 

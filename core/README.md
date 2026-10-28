@@ -26,6 +26,11 @@ provenance, and the upstream MIT notice. These are public documentation template
 not exact per-demonstration training annotations or promises of policy competence.
 The context loader checks coverage against the installed task registry.
 
+`scene_memory.py` defines structured transfer assessments and bounded semantic
+object/fixture memory. The simulator owns a fresh instance per episode and keeps
+it across replans. Entries are time-stamped visual claims, not ground-truth poses.
+Navigation requires fixture evidence and an explicit information need.
+
 | Message | Required meaning |
 | --- | --- |
 | Observation | Schema version; run/episode/step IDs; simulated timestamp; instruction version; task instruction; RGB frames/camera IDs; proprioception; optional declared depth/calibration |

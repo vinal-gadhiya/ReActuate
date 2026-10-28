@@ -89,6 +89,17 @@ episode instructions may name sampled objects or have different wording.
 Regenerate plans after rebuilding both `supervisor` and `sim` to use this strategy;
 old plans are still accepted but retain their original instruction text.
 
+Instruction stability applies while progress is observed. If stalled, Muse can
+temporarily choose the catalog task closest to the next required goal, inspect
+its effect, and then resume the pending transfer. For example, `NavigateKitchen`
+uses `Navigate to the [kitchen location].` and targets a fixture, not an arbitrary
+object or unrestricted exploration. A destination fixture must be grounded in
+the task or observations; an unseen glass's location cannot be invented. There
+is no generic object-search, exploration, or camera-scan task in the catalog.
+Temporary recovery does not mark the original transfer complete, and policy
+execution of navigation from a composite-task state remains unverified. Remaining
+budget alone is not a reason to repeat a stalled instruction.
+
 ## Containers
 
 - `sim`: owns the scene, task score, subtask execution budgets, and video recording.
@@ -241,9 +252,10 @@ Set `META_USE_SAM=1` in `.env`, then recreate only the supervisor:
 sudo docker compose --profile agent up -d --force-recreate supervisor
 ```
 
-At decision boundaries, SAM segments the current subtask's target noun phrase
-in the first policy camera. Its candidate boxes are supplied to Muse; full
-segmentation output is retained in the audit trace. This version does not decode
+At decision boundaries, SAM detects or tracks a noun phrase in the camera Muse
+selected on the preceding decision. The first query defaults to the current
+subtask target and first camera. Candidate boxes and clip-local tracks are
+supplied to Muse; full segmentation output is retained in the audit trace. It does not decode
 masks into a 3D pose or use SAM to modify GR00T images. Boxes alone cannot verify
 contact, containment, or grasp success. SAM adds up to one API call per decision
 and is skipped when only one call remains for the Muse decision.
@@ -273,8 +285,8 @@ For each scene seed, the comparison runs these conditions sequentially:
 
 1. `baseline`: GR00T with the original task instruction, without Muse or SAM.
 2. `muse`: Muse planning, visual verification, instruction updates, and replanning.
-3. `muse_sam`: the same initial plan as `muse`, plus target boxes from SAM at
-   decision boundaries. Later decisions and replans can differ.
+3. `muse_sam`: the same initial plan as `muse`, plus adaptive SAM detection and
+   clip tracking at decision boundaries. Later decisions and replans can differ.
 
 The task split, seed, episode horizon, and GR00T action chunk length match across
 conditions. Direct gripper intervention is disabled in all conditions. Each agent
@@ -306,6 +318,91 @@ instruction sequence without feedback. Matched scene seeds do not make GR00T
 sampling or Meta outputs identical, and a few episodes are diagnostic evidence,
 not a reliable performance estimate. A run with SAM boxes but no success gain is
 also a valid result; boxes alone add no grasp or motion-planning skill.
+
+## On-demand information gathering and object memory
+
+There is no mandatory scouting tour. Each decision supplies a structured
+assessment of transfer phase, possible held-object identity, grasp uncertainty,
+destination, missing information, and evidence. Object/fixture memory is owned
+by the simulator and persists through subtask changes and replans, with earlier
+observations kept as time-stamped claims. It resets between episodes. Muse can
+update semantic locations such as `counter beside sink`, rather than fabricate
+precise 3D positions. Empty detections and occlusion are not proof of absence.
+
+If more information is needed, Muse can:
+
+- Return `inspect` with an empty program to query perception again without
+  moving. Three repeated identical inspection requests at the same simulator
+  step stop with `perception_stall`; API and decision budgets always apply.
+- Choose `perception.target`, `perception.camera`, and `perception.mode`
+  (`detect` or `track`) for the next SAM query. This switches attention from
+  acquisition to the destination when appropriate, rather than fixating on the
+  original subtask target. Cameras can be queried across successive decisions.
+- Use `navigate(fixture="sink", steps=30)` to request a bounded GR00T navigation
+  burst. The target must match a fixture memory entry backed by evidence, name
+  a supported fixture, and have an explicit information need. No geometric
+  planner is added. The current manipulation remains pending; successful
+  navigation cannot satisfy its completion criteria.
+
+Navigation allows six bursts per episode by default (`--max-navigation-bursts`).
+It targets observed/remembered fixtures rather than arbitrary coordinates or
+unseen objects. Muse must assess motion, target reacquisition, and retention of
+any possibly held object after each burst. Destination search should not cause
+a second source pick or substitute a distractor for the original object.
+
+With `--sam`, the runner retains up to eight RGB samples per camera, sampled
+every eight control steps plus the latest endpoint. SAM track mode encodes the
+selected camera samples as H.264 MP4 inside the supervisor container and submits
+the clip to SAM 3.1; Muse receives that clip and frame-level tracking records.
+`clip_steps` maps clip frames to simulator steps. This is sparse temporal evidence,
+not every-frame streaming. A clip with only one sample uses image detection.
+Tracking uses a concept prompt and produces clip-local object IDs; IDs are not
+treated as globally consistent across clips or cameras. Raw masks remain in the
+audit. Current-frame boxes are separated from earlier tracking records. Without
+SAM, Muse still has RGB snapshots and persistent memory, but no SAM tracking.
+
+SAM uses at most one call per decision and is skipped when only one call remains
+for Muse. Track requests cost differently from images; the provider documents a
+minimum 50-frame charge for video, including short clips. See
+[SAM video requests](https://dev.meta.ai/docs/sam/segmenting). No automatic retries
+or silent switch to a different evaluation condition is performed.
+
+Each policy burst records action magnitudes, maximum changes in public robot
+measurements, and mean image change. Four consecutive numerically stationary
+bursts (`--stall-bursts`, zero disables) prevent repeating the same instruction.
+The supervisor must inspect, select a distinct supported recovery, or stop;
+two consecutive rejected motion requests end with `recovery_unavailable`.
+Motion does not itself establish grasp or semantic task progress.
+
+The supervisor's Muse output limit defaults to 8192 tokens, configurable with
+`META_MAX_OUTPUT_TOKENS` in `.env` (1024–16384). Incomplete responses report the
+provider's reason when available. They remain errors; increasing the cap does
+not guarantee completion. An error artifact retains the last step and memory.
+
+Rebuild both containers because the shared decision schema now requires
+`assessment`, `memory_updates`, and `perception` in addition to the existing
+decision fields. The supervisor image installs FFmpeg inside the container;
+no host installation is required. Run the fake-provider tests before a live trial:
+
+```bash
+sudo docker compose --profile agent build supervisor sim
+sudo docker compose --profile agent run --rm --no-deps supervisor \
+  python -m unittest discover -s tests -v
+sudo docker compose --profile agent up -d inference
+sudo docker compose --profile agent up -d --force-recreate supervisor
+sudo docker compose --profile agent run --rm sim \
+  python -m sim.run_agent \
+    --task MakeIceLemonade --mode agent --seed 0 --sam \
+    --decision-steps 40 --max-decisions 120 --max-api-calls 200 \
+    --max-navigation-bursts 6 --stall-bursts 4 \
+    --output /outputs/lemonade-memory-001
+```
+
+Inspect `episode-000/scene_memory.json`, `trace.jsonl`, `perception-*.npz` camera
+samples, and `rollout.mp4`. The trace exposes perception queries, SAM tracks,
+navigation tools, memory updates, and rejected recoveries. Real task success
+still comes only from RoboCasa. Navigation and tracking remain fallible and their
+contribution must be measured against the same policy without these interventions.
 
 ## Artifacts and limits
 

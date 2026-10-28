@@ -22,7 +22,10 @@ def decision(status='continue', program='run_groot(instruction="open cabinet", s
     return {'status': status, 'evidence': 'Door remains closed in the current image.',
             'program': program, 'replacement_steps': replacement or [],
             'handoff': {'readiness': 'ready' if status == 'complete' else 'not_applicable',
-                        'evidence': 'Shelf access is visible.' if status == 'complete' else 'No transition requested.'}}
+                        'evidence': 'Shelf access is visible.' if status == 'complete' else 'No transition requested.'},
+            'assessment': {'phase': 'unknown', 'held_object': '', 'grasp': 'uncertain',
+                           'destination': '', 'information_needed': '', 'evidence': 'No supported grasp claim.'},
+            'memory_updates': [], 'perception': {'target': '', 'camera': '', 'mode': 'detect'}}
 
 
 class FakeTools:
@@ -38,6 +41,9 @@ class FakeTools:
     def run_groot(self, instruction, steps):
         self.instructions.append(instruction)
         self.steps += min(steps, self.max_steps - self.steps)
+
+    def navigate(self, fixture, steps):
+        self.run_groot(f'Navigate to the {fixture}.', steps)
 
 
 class AgentTests(unittest.TestCase):
@@ -146,6 +152,25 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(transitions), 1)
         self.assertEqual(transitions[0]['step'], 4)
         self.assertEqual(sum(event['event'] == 'transition_blocked' for event in events), 1)
+
+    def test_temporary_navigation_keeps_transfer_pending(self):
+        tools, events = FakeTools(), []
+        plan = [step('transfer', 'Pick up the lemon wedge and place it in the glass of lemonade.')]
+        navigation = decision(program='navigate(fixture="sink", steps=4)')
+        navigation['assessment']['information_needed'] = 'Find the destination glass near the observed sink.'
+        navigation['memory_updates'] = [{'name': 'sink', 'kind': 'fixture', 'location': 'left camera',
+                                         'status': 'visible', 'evidence': 'Basin and faucet visible.'}]
+        replies = iter([
+            navigation,
+            decision(program='run_groot(instruction="Pick up the lemon wedge and place it in the glass of lemonade.", steps=4)'),
+            decision('stop', ''),
+        ])
+        reason = run_subtasks(tools, plan, 'agent', lambda *args: next(replies), events.append)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(tools.instructions, ['Navigate to the sink.', plan[0]['instruction']])
+        self.assertEqual(plan[0]['id'], 'transfer')
+        self.assertFalse(any(event['event'] == 'subtask_transition' for event in events))
+        self.assertFalse(tools.success)
 
     def test_handoff_context_retains_old_evidence_after_recent_history_rolls_off(self):
         accepted = {'event': 'subtask_transition', 'subtask': 'access', 'step': 20,

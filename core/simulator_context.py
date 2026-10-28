@@ -37,7 +37,7 @@ SIMULATOR_GUIDE = {
     'execution_rules': [
         'Subtasks execute in the original task environment. Atomic-task names do not create or switch environments.',
         'Physical scene state persists across subtask transitions and replans.',
-        'Only listed tools exist. No move_eef, navigation planner, IK solver, or generic pick/place primitive is installed.',
+        'Only listed tools exist. navigate wraps a fallible GR00T language request; no navigation planner, move_eef, IK solver, or generic pick/place primitive is installed.',
         'A run_groot instruction is a request to a fallible policy, not a guaranteed skill.',
         'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',
         'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
@@ -95,6 +95,8 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
         'tools': {
             'run_groot': {'available': True, 'arguments': 'instruction: str, steps: positive int',
                           'meaning': 'A short policy burst in the current scene'},
+            'navigate': {'available': True, 'arguments': 'fixture: str, steps: positive int',
+                         'meaning': 'Guarded NavigateKitchen instruction to an evidence-backed fixture; not a geometric planner'},
             'set_gripper': {'available': bool(allow_gripper), 'arguments': 'closed: bool, steps: int in [1,10]',
                             'meaning': 'Gripper command with zero commanded arm/base delta; not a grasp skill'},
         },

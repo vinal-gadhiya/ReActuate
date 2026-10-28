@@ -2,6 +2,8 @@
 # API-based planning and its tests do not need CUDA, torch, or GR00T weights.
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir numpy==1.26.4 Pillow==11.1.0
 WORKDIR /app
 COPY core /app/core

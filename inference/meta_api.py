@@ -23,7 +23,8 @@ class MetaAPIError(RuntimeError):
 
 def output_text(response, allow_empty=False):
     if response.get('status') != 'completed':
-        raise RuntimeError(f'Meta response did not complete: {response.get("status")}')
+        reason = response.get('incomplete_details', {}).get('reason') if isinstance(response.get('incomplete_details'), dict) else None
+        raise RuntimeError(f'Meta response did not complete: {response.get("status")}; reason={reason}')
     if any(part.get('type') == 'refusal' for item in response.get('output', [])
            for part in item.get('content', [])):
         raise RuntimeError('Meta returned a refusal')
@@ -44,6 +45,9 @@ class MetaAPI:
             raise RuntimeError('MODEL_API_KEY is not set in the supervisor container')
         self.base_url = os.environ.get('META_BASE_URL', 'https://api.meta.ai/v1').rstrip('/')
         self.timeout = timeout
+        self.max_output_tokens = int(os.environ.get('META_MAX_OUTPUT_TOKENS', '8192'))
+        if not 1024 <= self.max_output_tokens <= 16384:
+            raise ValueError('META_MAX_OUTPUT_TOKENS must be 1024–16384')
 
     def response(self, model, content, instructions=None, schema=None):
         body = {
@@ -53,7 +57,7 @@ class MetaAPI:
         # SAM returns segmentation records, not generated language. Keep Muse's
         # generation cap out of segmentation requests.
         if model != 'sam-3.1':
-            body['max_output_tokens'] = 4096
+            body['max_output_tokens'] = self.max_output_tokens
         else:
             body.pop('store')
         if instructions is not None:
@@ -72,7 +76,7 @@ class MetaAPI:
         except HTTPError as error:
             detail = error.read(4096).decode('utf-8', errors='replace')
             detail = detail.replace(self.key, '[REDACTED]')
-            detail = re.sub(r'data:image/[^\s"\\]+', '[IMAGE]', detail)
+            detail = re.sub(r'data:(?:image|video)/[^\s"\\]+', '[MEDIA]', detail)
             detail = re.sub(r'(?i)Bearer\s+[^\s"\\]+', 'Bearer [REDACTED]', detail)
             raise MetaAPIError(f'{model}: Meta HTTP {error.code}: {detail[:1200]}') from None
         except (URLError, TimeoutError):

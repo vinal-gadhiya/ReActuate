@@ -13,6 +13,58 @@ from core.agent import DECISION_SCHEMA, PLAN_SCHEMA, validate_decision, validate
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
 from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
+from inference.perception import tracking_records, video_part
+
+MEMORY_PROMPT = '''Maintain explicit episode-local visual memory on every decide
+response. assessment reports phase (access/acquire/carry/locate_destination/place/
+recover/unknown), held_object (empty string if unknown), grasp (supported/uncertain/
+empty/lost), destination, information_needed (empty if none), and concise evidence.
+Do not confuse full-transfer incompletion with absence of a grasp. Compare temporal
+samples: an object between fingers while shelf/background recedes can support a
+pickup; gripper closure alone cannot. Preserve uncertainty and revise earlier
+claims when evidence changes. If a supported lemon grasp is lost, record lost
+and reacquire that lemon; a garlic-like object is a distractor, not a substitute.
+
+memory_updates holds up to 12 evidence-backed semantic object/fixture records:
+name, kind, location, status, evidence. Name instances consistently. Locations are
+relations to observed fixtures, not invented 3D coordinates. Use uncertain for
+ambiguous identity, occluded for no current view; never treat no SAM matches as
+proof of absence. Record destination candidates even before acquisition. Memory
+persists across replans but is reset between episodes. Old observations are not
+current facts. Record fixtures only when current camera evidence establishes them.
+
+Use on-demand information gathering, not a compulsory kitchen tour. If the next
+physical goal lacks a target/destination location, first inspect all current
+cameras and remembered evidence. perception selects the NEXT SAM query: one short
+target noun phrase, camera label from current images, and mode detect or track.
+Use track around acquisition/carry/drop uncertainty, detect to find a destination
+or distinguish targets. status inspect has empty program and refreshes perception
+without moving; it consumes API/decision budget. If SAM is disabled, inspect may
+reassess RGB but cannot obtain SAM evidence. Empty updates are permitted.
+
+When current views are insufficient, navigate(fixture="sink", steps=30) requests
+a bounded GR00T NavigateKitchen burst to an observed/remembered fixture, keeping
+the current transfer pending. The fixture must match a fixture memory name and
+assessment.information_needed must explain the information to acquire. Prefer
+catalog-supported fixtures such as sink/fridge/stove, never arbitrary positions
+or an unseen glass. Do not navigate to counters/tables as if that ability were
+verified: use an observed nearby supported fixture when available. Check navigation
+effect in fresh views; revisit stale object locations before acting. No mandatory
+return to start, no teleport, no scene reset, no ground-truth map. While possibly
+holding an object use short bursts and check retention after each. Navigation is
+still a fallible policy instruction, not a motion planner. Navigation bursts are
+independently capped. Use the explicit navigate tool rather than run_groot for
+navigation. Once useful information is acquired, resume transfer or catalog-style
+placement with the correct held object and destination; avoid another source pick.
+
+last_motion contains measured public robot/image changes and action magnitudes.
+stationary_bursts counts numerical inactivity, not task failure. Repeated unchanged
+commands may be rejected with recovery_required: select a distinct supported
+recovery, inspection, or stop. Budget remaining is never proof of progress.
+SAM track IDs belong to ONE camera clip only; do not equate IDs across clips or
+cameras. Clip frame numbers map to supplied clip_steps; samples are sparse, not
+continuous evidence. Missing detections/occlusion cannot establish a drop or grasp.
+Keep evidence concise; do not restate every budget or every camera on every turn.'''
 
 PLAN_PROMPT = '''You plan short-horizon instructions for a frozen PandaOmron GR00T
 policy in RoboCasa. Decompose the original task into 1–10 physically meaningful,
@@ -60,10 +112,27 @@ Keep detailed verification criteria and recovery reasoning in success_criteria,
 evidence, and handoff, rather than appending motor-control narration to the policy
 instruction. Do not invent unsupported policy skills such as "recenter the wrist",
 "shift the gripper left", "look at the lemon", or "drive the base backward".
-Preserve an active task-level instruction across bursts while inspecting progress;
-do not paraphrase it at each decision. Recovery instructions must also use catalog
-task-level patterns. If no suitable supported action exists, replan or stop with
-the limitation instead of pretending arbitrary language is a motion controller.
+Preserve an active task-level instruction while it makes progress; do not
+paraphrase it merely for variety. Instruction stability does NOT mean repeating
+an ineffective task forever. At each decision, choose the catalog task whose
+description fits the NEXT necessary physical goal, which may be a temporary
+prerequisite rather than the current full transfer. After several consecutive
+bursts with no observed progress, select a distinct, grounded catalog recovery,
+replan, or stop with the limitation. Remaining budgets alone do not justify retry.
+The catalog has NavigateKitchen: "Navigate to the [kitchen location]." It means
+navigation to a named fixture, not generic object search or camera exploration.
+For example, "Navigate to the sink." is a candidate ONLY when that fixture is
+grounded in current observations or task context and approaching it serves the
+goal. Do not invent a glass location, substitute "Navigate to the glass" as if
+arbitrary-object navigation were documented, or assume navigation is reliable
+from the current state. There is no look_for_object, explore, scan, or arbitrary
+camera-motion task in this catalog. Inspect all supplied camera views first.
+If the held target needs transport, choose a grounded destination-relevant goal;
+do not return to source acquisition or switch to a distractor. Consider the risk
+of losing a possibly held object during navigation. A temporary catalog recovery
+does not complete or replace the original transfer: assess its visible effect,
+then resume the pending transfer instruction. If no suitable supported recovery
+exists, state that limitation instead of inventing a motion controller.
 These public documentation templates ground wording; they are not exact training
 annotations, new tools, guaranteed competencies, or a list of present objects.'''
 
@@ -87,6 +156,7 @@ episode. Compare the labeled before/current images and bounded execution history
 against the current subtask's success_criteria and the original task. Output:
 - complete only when current observations support THIS subtask's completion;
 - continue when more execution or a recovery is useful;
+- inspect to request another perception query without moving;
 - replan to replace ONLY the remaining suffix when the plan is invalid;
 - stop when evidence or remaining budgets cannot support useful execution.
 State visible evidence and uncertainty. A closed gripper does not prove a grasp;
@@ -122,6 +192,7 @@ For continue, write a short Python-looking program containing only 1–3 literal
 calls, with keyword arguments. It is parsed, never executed as arbitrary Python:
 run_groot(instruction="Open the fridge door.", steps=40)
 set_gripper(closed=False, steps=5)
+navigate(fixture="sink", steps=30)
 The second tool exists ONLY if capabilities explicitly allow it. Do not open a
 gripper holding an object without considering the task. Total program steps must
 not exceed decision_step_limit. Use shorter bursts near contact or uncertainty.
@@ -158,11 +229,17 @@ class Supervisor:
         remaining = context.get('api_calls_left', 0)
         if type(remaining) is not int or not 1 <= remaining <= 200:
             raise ValueError('API call budget exhausted or invalid')
-        if not 1 <= len(images) <= 6:
-            raise ValueError('Expected 1–6 labeled camera images')
+        clips = {key[5:]: value for key, value in images.items() if key.startswith('clip:')}
+        images = {key: value for key, value in images.items() if not key.startswith('clip:')}
+        if not 1 <= len(images) <= 6 or len(clips) > 3:
+            raise ValueError('Expected 1–6 snapshots and at most 3 camera clips')
         for frame in images.values():
             if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3 or max(frame.shape[:2]) > 1024:
                 raise ValueError('Invalid supervisor image')
+        for key, clip in clips.items():
+            if (f'current:{key}' not in images or clip.dtype != np.uint8 or clip.ndim != 4
+                    or not 1 <= len(clip) <= 8 or clip.shape[1:] != images[f'current:{key}'].shape):
+                raise ValueError('Invalid supervisor clip')
         if operation == 'decide':
             validate_plan({'steps': [context['step']]})
         audit = []
@@ -171,17 +248,31 @@ class Supervisor:
         if type(use_sam) is not bool:
             raise ValueError('use_sam must be a boolean')
         if use_sam and operation == 'decide' and remaining >= 2:
-            key = next(key for key in sorted(images) if key.startswith('current:'))
+            query = context.get('perception_query') or {}
+            key = query.get('camera') or next(key for key in sorted(images) if key.startswith('current:'))
+            if not key.startswith('current:') and f'current:{key}' in images:
+                key = f'current:{key}'
+            if key not in images or not key.startswith('current:'):
+                raise ValueError('Perception camera must identify a current snapshot')
             frame = images[key]
-            target = context['step']['target']
+            target = query.get('target') or context['step']['target']
+            clip = clips.get(key[len('current:'):])
+            if clip is not None and len(context.get('clip_steps', [])) != len(clip):
+                raise ValueError('Clip samples must have matching simulator-step labels')
+            tracking = query.get('mode') == 'track' and clip is not None and len(clip) >= 2
+            media = video_part(clip) if tracking else image_part(frame)
             text, usage = self.api.response('sam-3.1', [
-                {'type': 'input_text', 'text': target}, image_part(frame),
+                {'type': 'input_text', 'text': target}, media,
             ])
             audit.append(usage)
+            tracks = tracking_records(text, frame.shape[1], frame.shape[0], len(clip)) if tracking else []
             grounding = {
                 'camera': key, 'target': target,
-                'boxes': sam_boxes(text, frame.shape[1], frame.shape[0]),
-                'note': 'SAM candidates only; masks are retained in the API audit output.',
+                'mode': 'track' if tracking else 'detect', 'tracks': tracks,
+                'clip_steps': context.get('clip_steps', []) if tracking else [],
+                'boxes': [record for record in tracks if record['frame'] == len(clip) - 1]
+                         if tracking else sam_boxes(text, frame.shape[1], frame.shape[0]),
+                'note': 'Candidates only. Track IDs are clip-local; masks are retained in audit output.',
             }
         # The server supplies its checked-in catalog even for older clients.
         # Remove the duplicate from the scene context to send each template once.
@@ -198,7 +289,10 @@ class Supervisor:
         })}]
         for name, frame in sorted(images.items()):
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
-        prompt = INSTRUCTION_PROMPT + '\n\n' + CONTEXT_PROMPT + '\n\n' + (PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT)
+        if grounding is not None and grounding['mode'] == 'track':
+            content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
+        prompt = '\n\n'.join([MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
+                                PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT])
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
@@ -230,6 +324,7 @@ def make_handler(supervisor):
                 'instruction_grounding': 'atomic-task-descriptions-v1',
                 'atomic_catalog_ref': supervisor.instruction_catalog['upstream_ref'],
                 'atomic_catalog_tasks': len(supervisor.instruction_catalog['tasks']),
+                'agent_features': ['scene_memory', 'guarded_navigation', 'inspection', 'sam_clip_tracking'],
             })
 
         def do_POST(self):

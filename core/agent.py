@@ -1,6 +1,7 @@
 """Plans and bounded robot programs shared by the agent and simulator."""
 
 import ast
+from core.scene_memory import ASSESSMENT_SCHEMA, MEMORY_ENTRY_SCHEMA, PERCEPTION_SCHEMA, validate_scene_fields
 
 STEP_PROPERTIES = {
     'id': {'type': 'string'},
@@ -20,10 +21,13 @@ PLAN_SCHEMA = {
 DECISION_SCHEMA = {
     'type': 'object',
     'properties': {
-        'status': {'type': 'string', 'enum': ['continue', 'complete', 'replan', 'stop']},
+        'status': {'type': 'string', 'enum': ['continue', 'complete', 'replan', 'stop', 'inspect']},
         'evidence': {'type': 'string'},
         'program': {'type': 'string'},
         'replacement_steps': {'type': 'array', 'items': STEP_SCHEMA},
+        'assessment': ASSESSMENT_SCHEMA,
+        'memory_updates': {'type': 'array', 'items': MEMORY_ENTRY_SCHEMA},
+        'perception': PERCEPTION_SCHEMA,
         'handoff': {
             'type': 'object',
             'properties': {
@@ -33,7 +37,7 @@ DECISION_SCHEMA = {
             'required': ['readiness', 'evidence'], 'additionalProperties': False,
         },
     },
-    'required': ['status', 'evidence', 'program', 'replacement_steps', 'handoff'],
+    'required': ['status', 'evidence', 'program', 'replacement_steps', 'handoff', 'assessment', 'memory_updates', 'perception'],
     'additionalProperties': False,
 }
 
@@ -85,6 +89,10 @@ def parse_program(source, max_steps=80, allow_gripper=False):
                 raise ValueError('run_groot requires instruction and steps')
             if not isinstance(arguments['instruction'], str) or not 0 < len(arguments['instruction'].strip()) <= 1000:
                 raise ValueError('GR00T needs a short instruction')
+        elif name == 'navigate':
+            if (set(arguments) != {'fixture', 'steps'} or not isinstance(arguments['fixture'], str)
+                    or not 0 < len(arguments['fixture'].strip()) <= 120):
+                raise ValueError('navigate requires a named fixture and steps')
         elif name == 'set_gripper' and allow_gripper:
             if set(arguments) != {'closed', 'steps'} or type(arguments['closed']) is not bool:
                 raise ValueError('set_gripper requires boolean closed and steps')
@@ -106,12 +114,13 @@ def validate_decision(decision, max_steps=80, allow_gripper=False):
     if not isinstance(decision, dict) or set(decision) != set(DECISION_SCHEMA['properties']):
         raise ValueError('Invalid decision fields')
     status = decision['status']
-    if status not in ('continue', 'complete', 'replan', 'stop'):
+    if status not in ('continue', 'complete', 'replan', 'stop', 'inspect'):
         raise ValueError('Invalid decision status')
     if not isinstance(decision['evidence'], str) or not 0 < len(decision['evidence'].strip()) <= 4000:
         raise ValueError('A decision needs observable evidence or an explicit uncertainty statement')
     if not isinstance(decision['program'], str) or not isinstance(decision['replacement_steps'], list):
         raise ValueError('Invalid program or replacement plan')
+    validate_scene_fields(decision)
     handoff = decision['handoff']
     if (not isinstance(handoff, dict) or set(handoff) != {'readiness', 'evidence'}
             or handoff['readiness'] not in ('ready', 'blocked', 'uncertain', 'not_applicable')

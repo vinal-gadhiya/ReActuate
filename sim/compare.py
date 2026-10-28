@@ -34,6 +34,7 @@ def episode_metrics(directory):
     result = json.loads((directory / 'result.json').read_text())
     counts = {'decisions': 0, 'replans': 0, 'subtasks_marked_complete': 0,
               'accepted_handoffs': 0, 'blocked_handoffs': 0,
+              'navigation_bursts': 0, 'inspection_decisions': 0, 'sam_tracking_calls': 0,
               'sam_calls': 0, 'sam_calls_with_boxes': 0, 'supervisor_wall_seconds': 0.0}
     for line in (directory / 'trace.jsonl').read_text().splitlines():
         event = json.loads(line)
@@ -41,11 +42,15 @@ def episode_metrics(directory):
             counts['decisions'] += 1
             counts['replans'] += int(event['status'] == 'replan')
             counts['subtasks_marked_complete'] += int(event['status'] == 'complete')
+            counts['inspection_decisions'] += int(event['status'] == 'inspect')
         elif event['event'] == 'supervisor_response':
             counts['supervisor_wall_seconds'] += event.get('wall_seconds', 0.0)
             if event.get('sam') is not None:
                 counts['sam_calls'] += 1
                 counts['sam_calls_with_boxes'] += int(bool(event['sam']['boxes']))
+                counts['sam_tracking_calls'] += int(event['sam'].get('mode') == 'track')
+        elif event['event'] == 'tool' and event['tool'] == 'navigate':
+            counts['navigation_bursts'] += 1
         elif event['event'] == 'subtask_transition':
             counts['accepted_handoffs'] += 1
         elif event['event'] == 'transition_blocked':

@@ -1,6 +1,7 @@
 """Run a composite task with baseline, fixed-plan, or Muse-supervised control."""
 
 import argparse
+from collections import deque
 from importlib.metadata import version
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import numpy as np
 from core.agent import parse_program, validate_decision, validate_plan
 from core.policy_http import PolicyClient, SupervisorClient
 from core.simulator_context import build_simulator_context, load_operator_context
+from core.scene_memory import SceneMemory
 from sim.evaluate import make_policy_observation, validate_actions
 
 
@@ -37,6 +39,9 @@ class EpisodeTools:
         self.run_id = uuid.uuid4().hex
         self.allow_gripper = allow_gripper and gripper_supported(env)
         self.camera = metadata['modalities']['video']['modality_keys'][0]
+        self.frames = deque(maxlen=8)
+        self.last_diagnostics = {}
+        self.frames.append((0, {key: observation[key].copy() for key in metadata['modalities']['video']['modality_keys']}))
 
     @property
     def done(self):
@@ -50,8 +55,15 @@ class EpisodeTools:
         self.success = bool(info.get('success', False))
         self.ended = bool(terminated or truncated)
         self.video.append_data(self.observation[self.camera])
+        if self.steps % 8 == 0:
+            self.frames.append((self.steps, {key: self.observation[key].copy()
+                                            for key in self.metadata['modalities']['video']['modality_keys']}))
 
     def run_groot(self, instruction, steps):
+        before = {key: np.asarray(self.observation[key]).copy() for key in
+                  self.metadata['modalities']['state']['modality_keys']}
+        image_before = self.observation[self.camera].copy()
+        applied = []
         limit = min(self.steps + steps, self.max_steps)
         while self.steps < limit and not self.done:
             inputs = make_policy_observation(self.observation, self.metadata, instruction=instruction)
@@ -64,12 +76,36 @@ class EpisodeTools:
                 raise ValueError('Mismatched policy response')
             validate_actions(actions, self.env.action_space, self.metadata['action_horizon'])
             for index in range(min(self.chunk_steps, limit - self.steps)):
-                self.step({key: value[index].copy() for key, value in actions.items()})
+                action = {key: value[index].copy() for key, value in actions.items()}
+                applied.append(action)
+                self.step(action)
                 if self.done:
                     break
         # No queued actions survive this call or an instruction transition.
+        changes = {key: float(np.max(np.abs(np.asarray(self.observation[key]) - value)))
+                   for key, value in before.items()}
+        image_change = float(np.mean(np.abs(self.observation[self.camera].astype(float) - image_before.astype(float))))
+        self.last_diagnostics = {
+            'state_max_abs_changes': changes, 'image_mean_abs_change': image_change,
+            'action_mean_abs': {key: float(np.mean([np.abs(action[key]).mean() for action in applied]))
+                                for key in applied[0]} if applied else {},
+            'stationary': bool(changes) and max(changes.values()) < 1e-4 and image_change < 0.5,
+            'note': 'Motion diagnostic only; motion is not evidence of task progress or grasp success.',
+        }
+
+    def navigate(self, fixture, steps):
+        self.run_groot(f'Navigate to the {fixture}.', steps)
+
+    def perception_clip(self):
+        frames = list(self.frames)
+        current = {key: self.observation[key].copy() for key in self.metadata['modalities']['video']['modality_keys']}
+        if frames[-1][0] != self.steps:
+            frames.append((self.steps, current))
+        frames = frames[-8:]
+        return [step for step, _ in frames], {f'clip:{key}': np.stack([view[key] for _, view in frames]) for key in current}
 
     def set_gripper(self, closed, steps):
+        self.last_diagnostics = {'stationary': False, 'note': 'Direct gripper intervention; not a measured policy burst.'}
         if not self.allow_gripper:
             raise ValueError('Gripper primitive requires an explicitly enabled, validated delta OSC controller')
         expected = {
@@ -100,8 +136,10 @@ def handoff_context(plan, index, history):
 
 
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
-                 subtask_budget_mode='plan'):
-    index, spent, decisions, replans = 0, 0, 0, 0
+                 subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4):
+    index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
+    last_inspection, repeated_inspections = None, 0
+    memory = scene_memory if scene_memory is not None else SceneMemory()
     while not tools.done and index < len(plan):
         step = plan[index]
         remaining = tools.max_steps - tools.steps
@@ -125,10 +163,19 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             if decision is None:
                 return 'api_budget'
             validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper)
+            memory.update(decision, tools.steps, decisions)
+            record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
         record({'event': 'decision', 'subtask': step['id'], 'step': tools.steps, **decision})
         status = decision['status']
         if status == 'stop':
             return 'supervisor_stop'
+        if status == 'inspect':
+            inspection = (tools.steps, tuple(sorted(decision['perception'].items())))
+            repeated_inspections = repeated_inspections + 1 if inspection == last_inspection else 1
+            last_inspection = inspection
+            if repeated_inspections >= 3:
+                return 'perception_stall'
+            continue
         if status == 'complete':
             if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
                 record({'event': 'transition_blocked', 'subtask': step['id'],
@@ -152,12 +199,43 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             plan = plan[:index] + replacement
             replans, spent = replans + 1, 0
             continue
-        for name, arguments in parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper):
+        commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper)
+        try:
+            navigation_count = sum(name == 'navigate' for name, _ in commands)
+            if mode == 'agent' and memory.navigation_bursts + navigation_count > max_navigation_bursts:
+                raise ValueError('Navigation burst budget exhausted')
+            for name, arguments in commands:
+                if name == 'navigate':
+                    memory.authorize_navigation(arguments['fixture'], max_navigation_bursts)
+                if (mode == 'agent' and name == 'run_groot'
+                        and arguments['instruction'].strip().casefold().startswith('navigate ')):
+                    raise ValueError('Use navigate(fixture=..., steps=...) for guarded navigation')
+                if (mode == 'agent' and stall_bursts and memory.stall_streak >= stall_bursts
+                        and name == 'run_groot' and arguments['instruction'] == memory.last_instruction):
+                    raise ValueError('Stationary policy: choose information gathering, a distinct supported recovery, or stop')
+        except ValueError as error:
+            rejected += 1
+            record({'event': 'recovery_required', 'step': tools.steps, 'reason': str(error)})
+            if rejected >= 2:
+                return 'recovery_unavailable'
+            continue
+        rejected = 0
+        for name, arguments in commands:
             before = tools.steps
             getattr(tools, name)(**arguments)
+            if mode == 'agent':
+                diagnostics = getattr(tools, 'last_diagnostics', {})
+                instruction = arguments.get('instruction', f'Navigate to the {arguments.get("fixture", "")}.')
+                memory.note_motion(instruction, diagnostics)
+                if name == 'navigate':
+                    memory.navigation_bursts += 1
+                    memory.last_navigation = arguments['fixture'].casefold().strip()
             spent += tools.steps - before
             record({'event': 'tool', 'subtask': step['id'], 'tool': name, 'arguments': arguments,
-                    'step_before': before, 'step_after': tools.steps})
+                    'step_before': before, 'step_after': tools.steps,
+                    'diagnostics': getattr(tools, 'last_diagnostics', {})})
+            if mode == 'agent':
+                record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
             if tools.done:
                 break
     if tools.success:
@@ -186,6 +264,8 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-navigation-bursts', type=int, default=6)
+    parser.add_argument('--stall-bursts', type=int, default=4, help='Stationary bursts before requiring recovery; 0 disables')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
                         help='Agent only: enforce planned subtask ceilings, or use the remaining episode budget')
     parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
@@ -201,6 +281,8 @@ def main():
         parser.error('Decision steps <= 80, API calls <= 200, and replans >= 0 are required')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
+    if args.max_navigation_bursts < 0 or args.stall_bursts < 0:
+        parser.error('Navigation and stall limits must be nonnegative')
     if args.mode == 'fixed' and args.plan is None:
         parser.error('fixed mode requires --plan')
     if args.mode == 'baseline' and args.plan is not None:
@@ -240,8 +322,11 @@ def main():
         directory = args.output / f'episode-{episode:03d}'
         directory.mkdir()
         env = None
+        tools = None
+        api_calls = 0
         started = time.monotonic()
         history = []
+        memory = SceneMemory()
 
         def record(event):
             if event['event'] == 'decision' and event.get('program'):
@@ -250,7 +335,9 @@ def main():
                 event = {**event, 'program_path': filename}
             with (directory / 'trace.jsonl').open('a') as stream:
                 stream.write(json.dumps(event) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition'):
+            if event['event'] == 'scene_memory':
+                (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -273,11 +360,21 @@ def main():
                 images = dict(current)
                 if previous_images is not None and operation == 'decide':
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
+                clip_steps, clips = tools.perception_clip()
+                # Clips are supplied only when SAM is enabled, not to the policy.
+                if args.sam is True or (args.sam is None and supervisor_metadata['sam_enabled']):
+                    images.update(clips)
                 references = []
                 for number, (label, frame) in enumerate(sorted(images.items())):
+                    if label.startswith('clip:'):
+                        continue
                     filename = f'observation-{request_number:03d}-{number}.jpg'
                     imageio.imwrite(directory / filename, frame)
                     references.append({'label': label, 'path': filename})
+                if any(key.startswith('clip:') for key in images):
+                    clip_file = f'perception-{request_number:03d}.npz'
+                    np.savez_compressed(directory / clip_file, **clips, steps=np.asarray(clip_steps))
+                    references.append({'label': 'temporal camera samples', 'path': clip_file})
                 decisions_used = sum(item['event'] == 'decision' for item in history)
                 decisions_left = max(0, args.max_decisions - decisions_used)
                 calls_left = args.max_api_calls - api_calls
@@ -285,8 +382,16 @@ def main():
                 context.update({
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
+                    'scene_memory': memory.context(), 'perception_query': memory.perception,
+                    'observation_step': tools.steps, 'request_number': request_number,
+                    'clip_steps': clip_steps,
+                    'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
+                    'last_motion': tools.last_diagnostics,
                     'subtask_budget_mode': args.subtask_budget_mode,
-                    'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
+                    'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
+                                     'navigate': memory.navigation_bursts < args.max_navigation_bursts,
+                                     'inspect': True,
+                                     'sam': args.sam if args.sam is not None else supervisor_metadata['sam_enabled']},
                     'execution_limits': {
                         'step_unit': 'one executed environment control step, not seconds or API calls',
                         'control_frequency_hz': float(env.unwrapped.env.control_freq),
@@ -343,6 +448,7 @@ def main():
                     tools, plan, args.mode, decide, record,
                     args.decision_steps, args.max_decisions, args.max_replans,
                     args.subtask_budget_mode,
+                    memory, args.max_navigation_bursts, args.stall_bursts,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
@@ -353,7 +459,12 @@ def main():
                 (directory / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 results.append(result)
         except Exception as error:
-            (directory / 'error.json').write_text(json.dumps({'error': str(error)}, indent=2) + '\n')
+            (directory / 'error.json').write_text(json.dumps({
+                'error': str(error), 'step': tools.steps if tools is not None else 0,
+                'completed_api_calls': api_calls,
+                'note': 'A failed API request may have consumed usage not present in this count.',
+                'scene_memory': memory.context(),
+            }, indent=2) + '\n')
             raise
         finally:
             if env is not None:
