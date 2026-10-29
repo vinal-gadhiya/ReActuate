@@ -22,6 +22,7 @@ RUN python -m pip install torch==2.9.1 torchvision==0.24.1 \
     && python -c 'from importlib.metadata import version; print("torch=="+version("torch")); print("torchvision=="+version("torchvision"))' > /opt/build-info/torch-constraints.txt
 ENV PIP_CONSTRAINT=/opt/build-info/torch-constraints.txt
 COPY inference/requirements.patchwam.txt /opt/setup/requirements.patchwam.txt
+COPY inference/repair_cuda_metadata.py /opt/setup/repair_cuda_metadata.py
 RUN python -m pip install -r /opt/setup/requirements.patchwam.txt \
     && git init /opt/PatchWAM \
     && git -C /opt/PatchWAM remote add origin https://github.com/TianhengW/PatchWAM-RoboCasa.git \
@@ -29,6 +30,7 @@ RUN python -m pip install -r /opt/setup/requirements.patchwam.txt \
     && git -C /opt/PatchWAM checkout --detach FETCH_HEAD \
     && git -C /opt/PatchWAM rev-parse HEAD > /opt/build-info/patchwam.commit \
     && python -m pip install --no-deps -e /opt/PatchWAM \
+    && python /opt/setup/repair_cuda_metadata.py \
     && python -m pip check \
     && python -m pip freeze > /opt/build-info/pip-freeze.txt
 COPY core /app/core

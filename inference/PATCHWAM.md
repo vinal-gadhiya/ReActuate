@@ -36,6 +36,9 @@ this backend is selected. SAM and Muse stay in the separate supervisor container
 
 Run these commands on Thor from the repository root. No local laptop builds or
 training are needed. PatchWAM uses its own dependencies and CUDA 13 PyTorch image.
+The image applies the same checked cuSPARSELt 0.8.0 ARM64 wheel-metadata repair
+as the GR00T image before `pip check`. It verifies the AArch64 binary and its
+installed hashes, then corrects only the wheel platform tag and RECORD metadata.
 The released BF16 implementation requires a compatible GPU; this setup does not
 provide an RTX 2080 Ti/FP16 conversion or CPU fallback.
 
