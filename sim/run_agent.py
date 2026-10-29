@@ -520,6 +520,16 @@ def main():
                     'replans_left': max(0, args.max_replans - sum(
                         item['event'] == 'decision' and item.get('status') == 'replan' for item in history)),
                     'last_motion': tools.last_diagnostics,
+                    'recent_motion': [{
+                        'tool': item['tool'], 'step_before': item['step_before'], 'step_after': item['step_after'],
+                        'instruction': item['arguments'].get('instruction'),
+                        'state_max_abs_changes': item.get('diagnostics', {}).get('state_max_abs_changes', {}),
+                        'note': 'Kinematic changes, not task-progress labels; compare with the images.',
+                    } for item in [entry for entry in history if entry['event'] == 'tool'][-5:]],
+                    'remaining_execution_options': {
+                        'run_groot': tools.steps < max_steps and decisions_left > 0 and calls_left > 0,
+                        'scope': 'Zero navigation/replan budgets disable only those operations, not the current policy transfer.',
+                    },
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,

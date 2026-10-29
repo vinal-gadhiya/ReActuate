@@ -412,6 +412,13 @@ transport of a useful held object instead of returning to its old source or
 claiming the skipped target complete. `replans_left` reports the remaining
 replanning budget. This is prompt guidance plus the existing suffix-replan
 mechanism; it does not establish better visual grounding or successful execution.
+Stopping guidance compares the latest views with a five-burst kinematic history,
+including renewed motion after a pause. Numerical motion is not labeled task
+progress. Muse is told to reconsider stale stagnation claims when useful progress
+resumes, and that zero navigation/replan budgets do not disable the current
+GR00T transfer. Remaining execution options are explicit in its context.
+`status=stop` remains a model decision honored by the runner, not a guarantee
+that the task could not have succeeded with more execution.
 The selected task below is a smoke test, not a task-specific controller branch
 or evidence of generalization. Evaluate the same frozen prompts across held-out
 tasks and seeds, including order-sensitive tasks; preserve per-task regressions

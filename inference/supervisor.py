@@ -203,6 +203,9 @@ do not repeat an invalid program or treat it as a successful action.
 Read subtask_budget_mode. In episode mode, step.max_steps is advisory: spending
 that allowance does NOT exhaust the active subtask while episode/decision/API
 budgets remain. Do not stop solely because subtask_steps_used reaches max_steps.
+Navigation and replan budgets govern ONLY those operations. Zero navigation or
+replans does not disable run_groot, exhaust episode_steps_left, or invalidate the
+active transfer. Check execution_limits and remaining_execution_options.
 In plan mode, decision_step_limit can become zero: replan the remaining suffix
 if a concrete recovery is justified, or stop. Never mark an unfinished step done.
 Repeated paraphrases of the same failed command are not a new recovery strategy.
@@ -307,9 +310,11 @@ During decide, use status=replan with an empty program to make the change
 explicit. replacement_steps replaces the entire UNFINISHED suffix, not just the
 current step. Use new unique IDs; leave completed_steps intact. Put the newly
 selected executable goal first, retain every other unfinished requirement, and
-keep dependent goals after their prerequisites. Use placement-only instructions
-for an already-held object rather than requesting acquisition again. If the next object's location
-is unresolved, include an executable inspection/access prerequisite after the
+keep dependent goals after their prerequisites. Recompute success criteria for
+the revised order: do not require an independent future goal to be complete
+before accepting the current goal's completion. Use placement-only instructions
+for an already-held object rather than requesting acquisition again. If the next
+object's location is unresolved, include an executable inspection/access prerequisite after the
 current useful transfer so its completion does not depend on knowing a hidden
 object's pose. Never mark an unachieved goal complete to skip ahead or duplicate
 a reordered goal later. Replanning itself executes no motion and does not reset
@@ -323,6 +328,19 @@ same pose is not new evidence. Review other pending goal objects before another
 retry or another navigation to the same fixture. If none can be grounded and no
 supported information-gathering action helps, stop rather than spend the budget
 on repetition. These choices are visual hypotheses, not proof of competence.
+
+Stopping requires a fresh temporal judgment, not reuse of an earlier stall
+description. Compare recent_motion with current and before views. A brief pause,
+occlusion, or small movement can be part of a valid transfer. If task-relevant
+approach, alignment, or manipulation has resumed, discard the earlier stagnation
+judgment and continue the current useful instruction in a bounded burst. Neither
+motion magnitude nor lack of completion alone proves progress or failure.
+Before status=stop, explicitly explain why the LATEST observations show useful
+execution is unavailable, addressing any recent renewed movement. Exhausted
+navigation/replans alone is never that reason. If recent progress is unresolved,
+use available inspection or a short continuation when retention and clearance
+support it. Preserve the grasp. Do not invent progress, release to escape a
+stall, or run to the horizon blindly; actual execution limits still apply.
 '''
 
 
