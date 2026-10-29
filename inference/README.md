@@ -23,6 +23,10 @@ Current target: the RoboCasa GR00T N1.5 fork at
 preserved. Follow [RUNNING.md](RUNNING.md) for container builds, checkpoint
 download, startup, tests, and single-task evaluation.
 
+An optional [PatchWAM backend](PATCHWAM.md) has its own pinned source, image,
+asset downloader, and Compose overlay. It uses the same simulator/supervisor
+protocol without changing the default GR00T backend.
+
 `serve.py` exposes `/health`, `/metadata`, and `/predict` over HTTP. It uses the
 upstream `Gr00tPolicy` with the `panda_omron` data config. The upstream transport
 requires torch serialization in its client; the NumPy transport in `core/`

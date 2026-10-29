@@ -122,7 +122,7 @@ def save_report(output, rows, conditions=CONDITIONS):
         'Scene seeds do not make stochastic policy/API outputs identical. Small samples do not establish improvement.',
         'SAM supplies candidate boxes to Muse, not 3D control or a new GR00T skill.',
         'Replans may diverge. Errors are reported separately and are not counted as completed task failures.',
-        'GR00T owns all control actions in every condition. Muse/SAM change instructions and planning, not action values.',
+        'The selected frozen policy owns all control actions in every condition. Muse/SAM change instructions and planning, not action values.',
     ]}
     (output / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = ['# Closed-loop comparison', '',

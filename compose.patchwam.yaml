@@ -1,0 +1,19 @@
+# Optional overlay. Default compose.yaml and GR00T images/checkpoints stay intact.
+# docker compose -f compose.yaml -f compose.patchwam.yaml ...
+services:
+  inference:
+    image: objectworld-patchwam:latest
+    build:
+      context: .
+      dockerfile: inference/Dockerfile.patchwam
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      # Keep the inherited GR00T checkpoint mount read-only; PatchWAM uses only
+      # its separate /patchwam volume and leaves those existing files intact.
+      - patchwam-checkpoints:/patchwam
+      - checkpoints:/checkpoints:ro
+      - huggingface-cache:/cache/huggingface
+volumes:
+  patchwam-checkpoints:
+    name: objectworld-patchwam-checkpoints

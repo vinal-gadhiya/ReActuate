@@ -1,6 +1,7 @@
 """Public simulator/capability context; never inspect task-private object state."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 CONTEXT_VERSION = 2
@@ -71,13 +72,20 @@ def load_operator_context(path):
 def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gripper, operator_context):
     atomic_tasks = sorted(atomic_tasks)
     catalog = load_atomic_task_catalog(atomic_tasks)
+    guide = SIMULATOR_GUIDE
+    if metadata.get('policy') == 'patchwam':
+        guide = deepcopy(SIMULATOR_GUIDE)
+        guide['robot']['executor'] = 'Frozen PatchWAM predicts arm, gripper, and base actions from current images, proprioception, and language.'
+        guide['execution_rules'] = [rule.replace('GR00T', 'PatchWAM') for rule in guide['execution_rules']]
     return {
-        'version': CONTEXT_VERSION, 'guide': SIMULATOR_GUIDE,
+        'version': CONTEXT_VERSION, 'guide': guide,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {
             'registered_atomic_task_names': atomic_tasks,
-            'meaning': 'Task-category vocabulary only, not tools, scene entities, or verified GR00T competencies.',
+            'meaning': ('Task-category vocabulary only, not tools, scene entities, or verified PatchWAM competencies.'
+                        if metadata.get('policy') == 'patchwam' else
+                        'Task-category vocabulary only, not tools, scene entities, or verified GR00T competencies.'),
             'instruction_catalog': {
                 'upstream_ref': catalog['upstream_ref'],
                 'source': catalog['description_source'],

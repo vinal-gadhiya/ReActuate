@@ -416,6 +416,10 @@ class Supervisor:
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
         prompt = '\n\n'.join([MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
                                 PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
+        if context.get('control_owner') == 'patchwam':
+            # Keep the established tool schema; only its selected executor changes.
+            prompt = prompt.replace('GR00T', 'PatchWAM')
+            prompt += '\nrun_groot is the compatibility tool name for calling the selected PatchWAM policy. No GR00T model is used in this run.'
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)

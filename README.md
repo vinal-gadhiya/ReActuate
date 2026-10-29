@@ -18,6 +18,10 @@ For composite tasks, [the Meta agent guide](inference/AGENT.md) covers Muse
 decomposition, bounded robot programs, visual verification, optional SAM
 grounding, and comparisons with fixed plans and the original GR00T instruction.
 
+The optional [PatchWAM setup guide](inference/PATCHWAM.md) adds a separate frozen
+backend using its released preprocessing and checkpoint. Select it with the
+PatchWAM Compose overlay; default GR00T commands remain unchanged.
+
 ## RoboCasa and MuJoCo on Jetson AGX Thor
 
 This image targets **Linux ARM64 on Jetson AGX Thor with JetPack 7.x**,

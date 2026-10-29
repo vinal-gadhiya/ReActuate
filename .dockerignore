@@ -10,8 +10,10 @@
 !inference/
 !inference/Dockerfile
 !inference/Dockerfile.supervisor
+!inference/Dockerfile.patchwam
 !inference/*.py
 !inference/requirements.txt
+!inference/requirements.patchwam.txt
 !core/
 !core/*.py
 !core/*.json

@@ -1,0 +1,25 @@
+# Separate from GR00T. Versions must be validated by the Thor smoke test.
+# torch / torchvision are installed from CUDA 13 wheels by Dockerfile.patchwam.
+numpy==1.26.4
+pandas==2.2.3
+Pillow==11.1.0
+transformers==4.57.1
+tokenizers==0.22.1
+huggingface-hub==0.36.0
+safetensors==0.6.2
+accelerate==1.10.1
+hydra-core==1.3.2
+omegaconf==2.3.0
+einops==0.8.1
+imageio==2.37.0
+av==15.1.0
+pyarrow==20.0.0
+datasets==3.6.0
+jsonlines==4.0.0
+boto3==1.40.50
+termcolor==3.1.0
+GitPython==3.1.45
+rich==14.2.0
+tqdm==4.67.1
+sentencepiece==0.2.0
+opencv-python-headless==4.11.0.86
