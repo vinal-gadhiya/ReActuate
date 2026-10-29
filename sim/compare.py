@@ -52,6 +52,10 @@ def run_command(args, condition, seed, output, plan=None):
     if condition != 'baseline':
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
         command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
+        if getattr(args, 'hybrid_control', False):
+            command += ['--hybrid-control']
+    if getattr(args, 'require_unseen_composite', False):
+        command += ['--require-unseen-composite']
     if getattr(args, 'sam_video', False):
         command += ['--sam-video']
     return command
@@ -85,9 +89,9 @@ def episode_metrics(directory):
     return {**result, **counts}
 
 
-def summarize(rows):
+def summarize(rows, conditions=CONDITIONS):
     summary = {}
-    for condition in CONDITIONS:
+    for condition in conditions:
         selected = [row for row in rows if row['condition'] == condition]
         completed = [row for row in selected if row['status'] == 'completed']
         summary[condition] = {
@@ -100,7 +104,7 @@ def summarize(rows):
     pairs = []
     for seed in sorted({row['seed'] for row in rows}):
         matched = {row['condition']: row for row in rows if row['seed'] == seed and row['status'] == 'completed'}
-        if len(matched) == len(CONDITIONS):
+        if len(matched) == len(conditions):
             goals_match = len({row['original_goal'] for row in matched.values()}) == 1
             pairs.append({'seed': seed, 'original_goals_match': goals_match,
                           'scene_identities_match': len({json.dumps(row.get('scene_identity'), sort_keys=True)
@@ -110,14 +114,16 @@ def summarize(rows):
     return {'conditions': summary, 'paired_seeds': pairs}
 
 
-def save_report(output, rows):
-    report = {'runs': rows, **summarize(rows), 'limitations': [
+def save_report(output, rows, conditions=CONDITIONS):
+    report = {'runs': rows, **summarize(rows, conditions), 'limitations': [
         'Success is the original simulator task check; Muse subtask verdicts and SAM boxes are diagnostics only.',
         'Explicit scene pairs, process seeds, and initial scene fingerprints are checked before supervised execution. '
         'Muse and SAM share the initial plan for each seed.',
         'Scene seeds do not make stochastic policy/API outputs identical. Small samples do not establish improvement.',
         'SAM supplies candidate boxes to Muse, not 3D control or a new GR00T skill.',
         'Replans may diverge. Errors are reported separately and are not counted as completed task failures.',
+        'With --hybrid-control, supervised conditions receive action arbitration and placement primitives; '
+        'baseline remains unmodified. Any gain belongs to that combined system, not Muse reasoning alone.',
     ]}
     (output / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = ['# Closed-loop comparison', '',
@@ -145,12 +151,20 @@ def main():
     parser.add_argument('--max-replans', type=int, default=2)
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
+    parser.add_argument('--hybrid-control', action='store_true', help='Enable transport arbitration and bounded placement tools for supervised conditions only')
+    parser.add_argument('--require-unseen-composite', action='store_true')
+    parser.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS),
+                        help='Ordered conditions; baseline must be first, muse precedes muse_sam')
     parser.add_argument('--max-steps', type=int)
     parser.add_argument('--context-file', type=Path)
     parser.add_argument('--policy-url', default='http://inference:8000')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if (not args.conditions or args.conditions[0] != 'baseline' or len(set(args.conditions)) != len(args.conditions)
+            or ('muse_sam' in args.conditions and ('muse' not in args.conditions
+                or args.conditions.index('muse') > args.conditions.index('muse_sam')))):
+        parser.error('Conditions must start with baseline, contain no duplicates, and run muse before muse_sam')
     if len(set(args.seeds)) != len(args.seeds):
         parser.error('Seeds must be unique')
     if not (args.action_steps > 0 and 1 <= args.decision_steps <= 80
@@ -165,7 +179,7 @@ def main():
     rows = []
     for seed in args.seeds:
         plan = None
-        for condition in CONDITIONS:
+        for condition in args.conditions:
             output = args.output / f'seed-{seed}' / condition
             command = run_command(args, condition, seed, output, plan if condition == 'muse_sam' else None)
             print(f'\nStarting {condition}, scene seed {seed}: {output}', flush=True)
@@ -182,14 +196,14 @@ def main():
                     code = process.wait()
             if code:
                 rows.append({'seed': seed, 'condition': condition, 'status': 'error', 'returncode': code})
-                save_report(args.output, rows)
+                save_report(args.output, rows, args.conditions)
                 raise SystemExit(f'{condition} failed. Inspect {output.parent / (condition + ".log")}; comparison stopped.')
             row = episode_metrics(output / 'episode-000')
             rows.append({**row, 'condition': condition, 'status': 'completed'})
-            save_report(args.output, rows)
+            save_report(args.output, rows, args.conditions)
             if condition == 'muse':
                 plan = output / 'episode-000' / 'plan.json'
-    print(json.dumps(summarize(rows), indent=2), flush=True)
+    print(json.dumps(summarize(rows, args.conditions), indent=2), flush=True)
 
 
 if __name__ == '__main__':

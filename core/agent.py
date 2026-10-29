@@ -1,6 +1,7 @@
 """Plans and bounded robot programs shared by the agent and simulator."""
 
 import ast
+import math
 from core.scene_memory import ASSESSMENT_SCHEMA, MEMORY_ENTRY_SCHEMA, PERCEPTION_SCHEMA, validate_scene_fields
 
 STEP_PROPERTIES = {
@@ -63,7 +64,7 @@ def validate_plan(plan):
     return steps
 
 
-def parse_program(source, max_steps=80, allow_gripper=False):
+def parse_program(source, max_steps=80, allow_gripper=False, allow_vertical=False):
     """Parse literal calls; generated text is never eval/exec'd."""
     if not isinstance(source, str) or len(source) > 6000:
         raise ValueError('Invalid robot program')
@@ -81,9 +82,18 @@ def parse_program(source, max_steps=80, allow_gripper=False):
         name = call.func.id
         arguments = {}
         for keyword in call.keywords:
-            if keyword.arg in arguments or not isinstance(keyword.value, ast.Constant):
+            value = keyword.value
+            if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub) and isinstance(value.operand, ast.Constant):
+                if type(value.operand.value) not in (int, float):
+                    raise ValueError('Only numeric negative literals are allowed')
+                literal = -value.operand.value
+            elif isinstance(value, ast.Constant):
+                literal = value.value
+            else:
                 raise ValueError('Arguments must be unique literals')
-            arguments[keyword.arg] = keyword.value.value
+            if keyword.arg in arguments:
+                raise ValueError('Arguments must be unique literals')
+            arguments[keyword.arg] = literal
         if name == 'run_groot':
             if set(arguments) != {'instruction', 'steps'}:
                 raise ValueError('run_groot requires instruction and steps')
@@ -98,6 +108,12 @@ def parse_program(source, max_steps=80, allow_gripper=False):
                 raise ValueError('set_gripper requires boolean closed and steps')
             if type(arguments['steps']) is not int or not 1 <= arguments['steps'] <= 10:
                 raise ValueError('Gripper operation is limited to 10 control steps')
+        elif name == 'move_vertical' and allow_vertical:
+            if (set(arguments) != {'distance', 'steps'} or type(arguments['distance']) not in (int, float)
+                    or not math.isfinite(arguments['distance']) or not 0 < abs(arguments['distance']) <= 0.02):
+                raise ValueError('move_vertical requires a finite signed distance of at most 0.02 metres')
+            if type(arguments['steps']) is not int or not 1 <= arguments['steps'] <= 10:
+                raise ValueError('Vertical placement is limited to 10 control steps')
         else:
             raise ValueError(f'Tool unavailable: {name}')
         steps = arguments.get('steps')
@@ -107,10 +123,16 @@ def parse_program(source, max_steps=80, allow_gripper=False):
         commands.append((name, arguments))
     if total > max_steps:
         raise ValueError('Program exceeds the decision step budget')
+    if allow_vertical and any(name == 'move_vertical' for name, _ in commands) and any(
+            name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
+        raise ValueError('Observe after vertical motion before requesting release in a separate decision')
+    if allow_vertical and len(commands) > 1 and any(
+            name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
+        raise ValueError('Release must be the only command after a fresh placement observation')
     return commands
 
 
-def validate_decision(decision, max_steps=80, allow_gripper=False):
+def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertical=False):
     if not isinstance(decision, dict) or set(decision) != set(DECISION_SCHEMA['properties']):
         raise ValueError('Invalid decision fields')
     status = decision['status']
@@ -127,7 +149,7 @@ def validate_decision(decision, max_steps=80, allow_gripper=False):
             or not isinstance(handoff['evidence'], str) or not 0 < len(handoff['evidence'].strip()) <= 2000):
         raise ValueError('A decision needs handoff readiness and supporting evidence')
     if status == 'continue':
-        parse_program(decision['program'], max_steps, allow_gripper)
+        parse_program(decision['program'], max_steps, allow_gripper, allow_vertical)
     elif decision['program'].strip():
         raise ValueError('Only continue decisions may execute motion')
     if status == 'replan':

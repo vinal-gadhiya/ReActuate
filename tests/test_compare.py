@@ -48,6 +48,22 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(sam[sam.index('--plan') + 1], '/outputs/muse/episode-000/plan.json')
         for flag in ('--seed', '--max-steps', '--action-steps', '--decision-steps'):
             self.assertEqual(baseline[baseline.index(flag) + 1], sam[sam.index(flag) + 1])
+        args.hybrid_control, args.require_unseen_composite = True, True
+        baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
+        muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
+        self.assertNotIn('--hybrid-control', baseline)
+        self.assertIn('--hybrid-control', muse)
+        self.assertIn('--require-unseen-composite', baseline)
+        self.assertIn('--require-unseen-composite', muse)
+
+    def test_two_condition_report_includes_paired_result(self):
+        row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,
+               'original_goal': 'Arrange tea', 'steps': 20, 'wall_seconds': 10, 'api_calls': 0, 'sam_calls': 0,
+               'scene_identity': {'state': 'same'}}
+        report = summarize([row, {**row, 'condition': 'muse', 'success': True}], ('baseline', 'muse'))
+        self.assertEqual(set(report['conditions']), {'baseline', 'muse'})
+        self.assertEqual(report['paired_seeds'][0]['success'], {'baseline': False, 'muse': True})
+        self.assertTrue(report['paired_seeds'][0]['scene_identities_match'])
 
     def test_errors_are_not_treated_as_completed_failures(self):
         row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,

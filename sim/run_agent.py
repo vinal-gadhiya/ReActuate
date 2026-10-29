@@ -15,6 +15,7 @@ from core.policy_http import PolicyClient, SupervisorClient
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
 from core.observations import check_rgb
+from core.transport_control import ACTION_SHAPES, TransportControl
 from sim.evaluate import make_policy_observation, validate_actions
 from sim.scene_checks import choose_layout_style, reset_scene, scene_fingerprint, seed_process, verify_scene
 
@@ -34,13 +35,28 @@ def gripper_supported(env):
 
 class EpisodeTools:
     def __init__(self, env, observation, policy, metadata, video, max_steps, chunk_steps, allow_gripper=False,
-                 artifact_directory=None):
+                 artifact_directory=None, hybrid_control=False):
         self.env, self.observation, self.policy, self.metadata, self.video = env, observation, policy, metadata, video
         self.max_steps, self.chunk_steps = max_steps, chunk_steps
         self.steps, self.success, self.ended = 0, False, False
         self.inference_seconds = 0.0
         self.run_id = uuid.uuid4().hex
-        self.allow_gripper = allow_gripper and gripper_supported(env)
+        self.allow_gripper = (allow_gripper or hybrid_control) and gripper_supported(env)
+        if hybrid_control and not self.allow_gripper:
+            raise ValueError('Hybrid control requires the validated fixed-impedance delta OSC controller')
+        self.transport_control = TransportControl() if hybrid_control else None
+        self.allow_vertical = hybrid_control
+        if hybrid_control:
+            self._validate_primitive_schema()
+            controller = env.unwrapped.env.robots[0].composite_controller.part_controllers['right']
+            if getattr(controller, 'input_ref_frame', None) not in ('base', 'world'):
+                raise ValueError('Unknown controller translation frame')
+            limits = np.asarray(controller.output_max)[:3]
+            inputs = np.asarray(controller.input_max)[:3]
+            if (limits.shape != (3,) or inputs.shape != (3,) or not np.all(np.isfinite(limits))
+                    or not np.all(limits > 0) or not np.all(np.isfinite(inputs)) or not np.all(inputs > 0)):
+                raise ValueError('Unknown controller translation scaling')
+            self.translation_scale = limits / inputs
         self.camera = metadata['modalities']['video']['modality_keys'][0]
         self.frames = deque(maxlen=8)
         self.artifact_directory = artifact_directory
@@ -51,9 +67,19 @@ class EpisodeTools:
     def done(self):
         return self.success or self.ended or self.steps >= self.max_steps
 
-    def step(self, action):
+    def step(self, action, authorized_release=False):
         if self.done:
             return
+        if self.transport_control is not None:
+            action = self.transport_control.filter(action, authorized_release)
+            if self.transport_control.phase == 'place':
+                # Limit policy and primitive translation to 2 mm per control step.
+                bound = 0.002 / self.translation_scale
+                original = action['action.end_effector_position'].copy()
+                action['action.end_effector_position'] = np.clip(original, -bound, bound)
+                if np.any(original != action['action.end_effector_position']):
+                    counts = self.transport_control.overrides
+                    counts['placement_translation_limited'] = counts.get('placement_translation_limited', 0) + 1
         self.observation, _, terminated, truncated, info = self.env.step(action)
         self.steps += 1
         self.success = bool(info.get('success', False))
@@ -62,6 +88,7 @@ class EpisodeTools:
         if self.steps % 8 == 0:
             self.frames.append((self.steps, {key: self.observation[key].copy()
                                             for key in self.metadata['modalities']['video']['modality_keys']}))
+        return action
 
     def run_groot(self, instruction, steps):
         before = {key: np.asarray(self.observation[key]).copy() for key in
@@ -83,8 +110,7 @@ class EpisodeTools:
             validate_actions(actions, self.env.action_space, self.metadata['action_horizon'])
             for index in range(min(self.chunk_steps, limit - self.steps)):
                 action = {key: value[index].copy() for key, value in actions.items()}
-                applied.append(action)
-                self.step(action)
+                applied.append(self.step(action))
                 if self.done:
                     break
         # No queued actions survive this call or an instruction transition.
@@ -121,21 +147,42 @@ class EpisodeTools:
         self.last_diagnostics = {'stationary': False, 'note': 'Direct gripper intervention; not a measured policy burst.'}
         if not self.allow_gripper:
             raise ValueError('Gripper primitive requires an explicitly enabled, validated delta OSC controller')
-        expected = {
-            'action.end_effector_position': (3,), 'action.end_effector_rotation': (3,),
-            'action.gripper_close': (1,), 'action.base_motion': (4,), 'action.control_mode': (1,),
-        }
-        if set(self.env.action_space.spaces) != set(expected):
-            raise ValueError('Unknown PandaOmron action schema')
-        for key, shape in expected.items():
-            if self.env.action_space.spaces[key].shape != shape:
-                raise ValueError(f'Unknown action dimensions: {key}')
+        self._validate_primitive_schema()
+        if self.transport_control is not None:
+            self.transport_control.authorize('set_gripper', {'closed': closed})
         for _ in range(steps):
             if self.done:
                 break
-            action = {key: np.zeros(shape, dtype=np.float32) for key, shape in expected.items()}
+            action = {key: np.zeros(shape, dtype=np.float32) for key, shape in ACTION_SHAPES.items()}
             action['action.gripper_close'][:] = float(closed)
-            # Gym maps control_mode < .5 to arm control (-1); base motion stays zero.
+            self.step(action, authorized_release=not closed)
+        if not closed and self.transport_control is not None:
+            self.transport_control.released()
+
+    def _validate_primitive_schema(self):
+        if set(self.env.action_space.spaces) != set(ACTION_SHAPES):
+            raise ValueError('Unknown PandaOmron action schema')
+        for key, shape in ACTION_SHAPES.items():
+            if self.env.action_space.spaces[key].shape != shape:
+                raise ValueError(f'Unknown action dimensions: {key}')
+
+    def move_vertical(self, distance, steps):
+        if not self.allow_vertical:
+            raise ValueError('Vertical placement requires hybrid control')
+        if not np.isfinite(distance) or not 0 < abs(distance) <= 0.02 or not 1 <= steps <= 10 or abs(distance) / steps > 0.002 + 1e-9:
+            raise ValueError('Vertical motion is limited to 2 mm per step and 20 mm per call')
+        self.transport_control.authorize('move_vertical', {})
+        # PandaOmron has a planar mobile base: base/world z axes coincide.
+        command = distance / steps / self.translation_scale[2]
+        if abs(command) > self.env.action_space.spaces['action.end_effector_position'].high[2]:
+            raise ValueError('Vertical request exceeds controller input range')
+        self.last_diagnostics = {'stationary': False, 'note': 'Bounded vertical delta command; not measured displacement or contact.'}
+        for _ in range(steps):
+            if self.done:
+                break
+            action = {key: np.zeros(shape, dtype=np.float32) for key, shape in ACTION_SHAPES.items()}
+            action['action.end_effector_position'][2] = command
+            action['action.gripper_close'][:] = 1
             self.step(action)
 
 
@@ -176,10 +223,17 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             decisions += 1
             if decision is None:
                 return 'api_budget'
-            validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper)
+            validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
+                              getattr(tools, 'allow_vertical', False))
             memory.update(decision, tools.steps, decisions)
             record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
         record({'event': 'decision', 'subtask': step['id'], 'step': tools.steps, **decision})
+        transport = getattr(tools, 'transport_control', None)
+        if transport is not None and mode == 'agent':
+            transport.update(decision['assessment'], decision['memory_updates'])
+            record({'event': 'transport_control', 'step': tools.steps, **transport.context()})
+            if transport.loss_detected:
+                return 'object_loss_reported'
         status = decision['status']
         if status == 'stop':
             return 'supervisor_stop'
@@ -215,12 +269,17 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             plan = plan[:index] + replacement
             replans, spent = replans + 1, 0
             continue
-        commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper)
+        commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
+                                 getattr(tools, 'allow_vertical', False))
         try:
             navigation_count = sum(name == 'navigate' for name, _ in commands)
             if mode == 'agent' and memory.navigation_bursts + navigation_count > max_navigation_bursts:
                 raise ValueError('Navigation burst budget exhausted')
             for name, arguments in commands:
+                if transport is not None:
+                    transport.authorize(name, arguments)
+                    if name == 'move_vertical' and abs(arguments['distance']) / arguments['steps'] > 0.002 + 1e-9:
+                        raise ValueError('Use at least one control step per 2 mm of vertical motion')
                 if name == 'navigate':
                     memory.authorize_navigation(arguments['fixture'], max_navigation_bursts)
                 if (mode == 'agent' and name == 'run_groot'
@@ -237,13 +296,17 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             continue
         rejected = 0
         motion_left = placement_burst_steps if mode == 'agent' and memory.near_destination() else decision_steps
+        if transport is not None and transport.held_object:
+            motion_left = min(motion_left, 16)
         for name, arguments in commands:
             if motion_left <= 0:
                 break
             if arguments['steps'] > motion_left:
                 record({'event': 'bounded_execution', 'step': tools.steps,
-                        'reason': 'Short feedback interval while holding an object near its destination',
+                        'reason': 'Short feedback interval while holding an object or approaching placement',
                         'requested_steps': arguments['steps'], 'executed_step_limit': motion_left})
+                if name == 'move_vertical':
+                    arguments = {**arguments, 'distance': arguments['distance'] * motion_left / arguments['steps']}
                 arguments = {**arguments, 'steps': motion_left}
             before = tools.steps
             getattr(tools, name)(**arguments)
@@ -258,7 +321,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             motion_left -= tools.steps - before
             record({'event': 'tool', 'subtask': step['id'], 'tool': name, 'arguments': arguments,
                     'step_before': before, 'step_after': tools.steps,
-                    'diagnostics': getattr(tools, 'last_diagnostics', {})})
+                    'diagnostics': getattr(tools, 'last_diagnostics', {}),
+                    **({'transport_control': transport.context()} if transport is not None else {})})
             if mode == 'agent':
                 record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
             if tools.done:
@@ -295,6 +359,8 @@ def main():
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
                         help='Agent only: enforce planned subtask ceilings, or use the remaining episode budget')
     parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
+    parser.add_argument('--hybrid-control', action='store_true', help='Agent only: grasp latch, placement base stop, bounded vertical control and explicit release')
+    parser.add_argument('--require-unseen-composite', action='store_true', help='Require task in pinned composite_unseen registry and outside pretrain300')
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clip tracking; default uses images only')
@@ -317,6 +383,8 @@ def main():
         parser.error('fixed mode requires --plan')
     if args.mode == 'baseline' and args.plan is not None:
         parser.error('baseline mode always uses the original task instruction')
+    if args.hybrid_control and args.mode != 'agent':
+        parser.error('--hybrid-control requires agent mode; baseline actions remain unmodified')
     if args.plan_only and args.mode != 'agent':
         parser.error('--plan-only requires agent mode')
     starting_plan = None
@@ -328,13 +396,16 @@ def main():
     import gymnasium as gym
     import imageio.v2 as imageio
     import robocasa
-    from robocasa.utils.dataset_registry import ATOMIC_TASK_DATASETS, COMPOSITE_TASK_DATASETS
+    from robocasa.utils.dataset_registry import ATOMIC_TASK_DATASETS, COMPOSITE_TASK_DATASETS, TASK_SET_REGISTRY
     from robocasa.utils.dataset_registry_utils import get_task_horizon
     from robocasa.models.scenes import scene_registry
     from robocasa.environments.kitchen.kitchen import REGISTERED_KITCHEN_ENVS
 
     if args.task not in ATOMIC_TASK_DATASETS and args.task not in COMPOSITE_TASK_DATASETS:
         parser.error('Unknown registered RoboCasa task')
+    if args.require_unseen_composite and (args.task not in TASK_SET_REGISTRY['composite_unseen']
+                                        or args.task in TASK_SET_REGISTRY['pretrain300']):
+        parser.error('Task must be in composite_unseen and excluded from pretrain300')
     max_steps = args.max_steps or get_task_horizon(args.task)
     policy = PolicyClient(args.policy_url)
     metadata = policy.metadata()
@@ -433,9 +504,11 @@ def main():
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
                     'last_motion': tools.last_diagnostics,
+                    'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
+                                     'move_vertical': tools.allow_vertical,
                                      'navigate': memory.navigation_bursts < args.max_navigation_bursts,
                                      'inspect': True,
                                      'sam': args.sam if args.sam is not None else supervisor_metadata['sam_enabled']},
@@ -467,11 +540,19 @@ def main():
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
                 video.append_data(observation[camera_keys[0]])
                 tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps,
-                                     args.allow_gripper, directory)
+                                     args.allow_gripper, directory, args.hybrid_control)
                 simulator_context = build_simulator_context(
                     args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
                     ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
                 )
+                simulator_context['tools']['move_vertical'] = {
+                    'available': tools.allow_vertical,
+                    'arguments': 'distance: signed metres in [-0.02,0.02], steps: 1..10; at most 0.002 metres per step',
+                    'meaning': 'Small vertical delta in base/world z, gripper held closed, base stopped. Not IK, contact sensing, or guaranteed displacement.',
+                }
+                simulator_context['task']['benchmark_membership'] = (
+                    'composite_unseen' if args.task in TASK_SET_REGISTRY['composite_unseen'] else 'other')
+                simulator_context['task']['in_pretrain300'] = args.task in TASK_SET_REGISTRY['pretrain300']
                 (directory / 'simulator_context.json').write_text(json.dumps(simulator_context, indent=2) + '\n')
                 if args.mode == 'baseline':
                     plan = [{'id': 'original', 'instruction': goal, 'target': 'task objects',
@@ -486,6 +567,8 @@ def main():
                 def decide(active_plan, index, spent, limit):
                     if memory.near_destination():
                         limit = min(limit, args.placement_burst_steps)
+                    if tools.transport_control is not None and tools.transport_control.held_object:
+                        limit = min(limit, 16)
                     return ask('decide', {
                         'step': active_plan[index], 'subtask_steps_used': spent,
                         'completed_steps': active_plan[:index], 'remaining_steps': active_plan[index + 1:],
@@ -507,6 +590,9 @@ def main():
                     'api_calls': api_calls, 'wall_seconds': time.monotonic() - started,
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
+                    'hybrid_control': args.hybrid_control,
+                    'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
+                    'benchmark_membership': simulator_context['task']['benchmark_membership'],
                 }
                 (directory / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 results.append(result)

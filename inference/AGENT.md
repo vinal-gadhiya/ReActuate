@@ -394,6 +394,76 @@ the supervisor client allows 480 seconds for the combined SAM/Muse request.
 Timeouts remain errors and are not automatically retried or counted as policy
 task failures. Connection errors and timeouts are reported separately.
 
+## Hybrid transport and placement trial
+
+`--hybrid-control` on `sim.compare` enables action arbitration for Muse conditions
+only. It does not train or replace GR00T. The baseline retains original actions.
+Use `--conditions baseline muse` to test without SAM first.
+
+After Muse reports a visually supported object grasp in an acquisition/transport
+phase, the runner latches the gripper closed and overrides subsequent policy-open
+commands. Uncertainty does not clear the latch. Access/handle manipulation does
+not automatically latch. Transport feedback intervals are capped at 16 steps;
+near-destination intervals retain the shorter placement limit. A visible loss
+while latched ends the trial with `object_loss_reported`, rather than assuming
+floor recovery is available. This cannot prevent physical slips or collisions,
+and protection begins only after a supported grasp is reported.
+
+When Muse selects `phase=place`, base/torso commands are zeroed, arm control mode
+is selected, orientation is held, and translation is limited to 2 mm per axis
+per control step. Muse must establish position and orientation alignment before
+selecting this phase. This mode is for transfers, not pouring. It can hold the current
+pose with `set_gripper(closed=True, steps=5)` and command final vertical movement:
+
+```python
+move_vertical(distance=-0.01, steps=5)
+```
+
+Negative distance lowers; positive raises. Calls are limited to 20 mm total,
+2 mm per step, and 10 steps. Scaling comes from the validated fixed-impedance
+delta OSC controller. These are commanded deltas, not guaranteed displacement,
+collision avoidance, or contact sensing. No private object pose or contact state
+is used. Reobserve after movement; never repeatedly push against a surface.
+
+Release must be a separate decision containing only
+`set_gripper(closed=False, steps=5)`. The runner requires a latched object,
+supported grasp, placement phase, and an explicit destination marked visible in
+that decision's memory updates. Muse must additionally establish support or a
+low, clear receptacle placement from current views. This visual judgment can be
+wrong; the gate does not certify support. Then verify stable placement and
+gripper clearance. Policy-open commands alone never release a latched object.
+
+The first selected task is `ArrangeTea`: kettle and mug onto a tray, followed by
+closing cabinet doors. Its cabinet starts open. At the pinned RoboCasa revision
+it belongs to `composite_unseen` and is excluded from `pretrain300`.
+`--require-unseen-composite` checks both memberships inside the simulator before
+execution. This is benchmark task holdout for the multitask checkpoint, not a
+claim about every source of GR00T foundation pretraining. `--split pretrain`
+keeps the benchmark's pretraining scene distribution; task holdout and scene
+holdout are different dimensions.
+
+Run on Thor, using a fresh output directory:
+
+```bash
+sudo docker compose --profile agent build sim supervisor
+sudo docker compose --profile agent run --rm --no-deps supervisor \
+  python -m unittest discover -s tests -v
+sudo docker compose --profile agent up -d --wait inference supervisor
+sudo docker compose --profile agent run --rm sim \
+  python -m sim.compare \
+    --task ArrangeTea --split pretrain --seeds 0 \
+    --conditions baseline muse --require-unseen-composite --hybrid-control \
+    --max-decisions 190 --max-api-calls 200 \
+    --output /outputs/tea-hybrid-comparison-001
+```
+
+Proceed only after tests and service health pass. The supervisor must use its
+rebuilt image because the program vocabulary and placement instructions changed.
+Inspect `transport_control` events and each tool event's override counters in
+`trace.jsonl`; final counters also appear in `result.json`. A gain measures the
+combined supervisor/control intervention. Use a matching Muse-only run without
+`--hybrid-control` to separate control effects from instruction supervision.
+
 ## Scene and RGB integrity
 
 The comparison runner fixes `PYTHONHASHSEED` for child processes. The simulator
