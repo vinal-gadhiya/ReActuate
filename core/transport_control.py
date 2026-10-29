@@ -44,6 +44,13 @@ class TransportControl:
         if name == 'move_vertical' and not (self.held_object and self.phase == 'place' and self.release_ready):
             raise ValueError('Vertical placement requires a latched object and current placement evidence')
 
+    def authorize_program(self, commands):
+        if self.held_object and len(commands) > 1 and any(
+                name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
+            raise ValueError('Release of a latched object must be the only command after a fresh placement observation')
+        for name, arguments in commands:
+            self.authorize(name, arguments)
+
     def filter(self, action, authorized_release=False):
         result = {key: np.asarray(value).copy() for key, value in action.items()}
         if self.held_object and not authorized_release:

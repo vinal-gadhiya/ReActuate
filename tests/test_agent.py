@@ -47,6 +47,40 @@ class FakeTools:
 
 
 class AgentTests(unittest.TestCase):
+    def test_invalid_model_program_returns_feedback_without_motion_then_recovers(self):
+        tools, events = FakeTools(), []
+        invalid = decision(program='env.step()')
+        replies = iter([invalid, decision(), decision(status='stop', program='')])
+        reason = run_subtasks(tools, [step('1', 'open cabinet')], 'agent',
+                              lambda *args: next(replies), events.append)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(tools.steps, 4)
+        self.assertEqual(len([event for event in events if event['event'] == 'invalid_decision']), 1)
+
+    def test_repeated_invalid_programs_stop_with_no_motion(self):
+        tools, events = FakeTools(), []
+        reason = run_subtasks(tools, [step('1', 'open cabinet')], 'agent',
+                              lambda *args: decision(program='env.step()'), events.append)
+        self.assertEqual(reason, 'invalid_decision_limit')
+        self.assertEqual(tools.steps, 0)
+        self.assertEqual(len(events), 3)
+
+    def test_invalid_supervisor_proposal_preserves_api_usage_and_audit(self):
+        invalid = decision(program='env.step()')
+
+        class FakeAPI:
+            def response(self, *args, **kwargs):
+                return invalid, {'model': 'test-model', 'usage': {'output_tokens': 10}}
+
+        reply = Supervisor(FakeAPI(), 'test-model').handle('decide', {
+            'api_calls_left': 1, 'decision_step_limit': 40, 'capabilities': {'set_gripper': False},
+            'step': step('1', 'open cabinet'),
+        }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
+        self.assertIs(reply['result'], invalid)
+        self.assertTrue(reply['validation_error'])
+        self.assertEqual(reply['api_calls'], 1)
+        self.assertEqual(reply['audit'][0]['usage']['output_tokens'], 10)
+
     def test_program_validation_rejects_arbitrary_code_and_budget_overruns(self):
         for code in (
             'import os', 'env.reset()', 'while True: pass', 'x = 1',

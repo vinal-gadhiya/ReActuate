@@ -187,6 +187,9 @@ goal. Keep the full pending goal in replacement_steps and use new unique ids.
 For the final step or a non-complete decision, use not_applicable with a short
 explanation. accepted_handoffs preserve earlier claims, not permanent facts:
 if a door closes or access is lost, recover access before attempting the grasp.
+If history contains invalid_decision or recovery_required, no motion from that
+proposal was executed. Use the rejection reason to correct the next program;
+do not repeat an invalid program or treat it as a successful action.
 Read subtask_budget_mode. In episode mode, step.max_steps is advisory: spending
 that allowance does NOT exhaust the active subtask while episode/decision/API
 budgets remain. Do not stop solely because subtask_steps_used reaches max_steps.
@@ -238,6 +241,10 @@ Keep destination name consistent between assessment and memory. After release,
 report the grasp empty unless a new lift is observed. If a carried object is
 visibly lost, report lost and stop: this trial prioritizes prevention and does not
 assume GR00T can recover floor drops. Do not mark access/door handles as cargo.
+Opening an empty, unlatched gripper during acquisition is preparation, not cargo
+release: set_gripper(closed=False, ...) may precede run_groot in that case.
+When transport_control.held_object_latch is nonempty, release must be the only
+command in the program after a fresh placement observation.
 '''
 
 
@@ -340,13 +347,20 @@ class Supervisor:
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
+        validation_error = None
         if operation == 'plan':
             validate_plan(result)
         else:
-            validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],
-                              context['capabilities'].get('move_vertical', False))
+            try:
+                validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],
+                                  context['capabilities'].get('move_vertical', False))
+            except (ValueError, KeyError, SyntaxError, TypeError) as error:
+                # A model proposal is not a malformed HTTP request. Preserve API
+                # usage/audit and let the runner reject without motion, then feed
+                # the reason into the next budgeted decision.
+                validation_error = str(error)
         return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
-                'received_image_diagnostics': diagnostics}
+                'received_image_diagnostics': diagnostics, 'validation_error': validation_error}
 
 
 def make_handler(supervisor):

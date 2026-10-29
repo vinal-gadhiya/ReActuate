@@ -126,9 +126,6 @@ def parse_program(source, max_steps=80, allow_gripper=False, allow_vertical=Fals
     if allow_vertical and any(name == 'move_vertical' for name, _ in commands) and any(
             name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
         raise ValueError('Observe after vertical motion before requesting release in a separate decision')
-    if allow_vertical and len(commands) > 1 and any(
-            name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
-        raise ValueError('Release must be the only command after a fresh placement observation')
     return commands
 
 

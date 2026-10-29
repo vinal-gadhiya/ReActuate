@@ -82,12 +82,21 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(parse_program('move_vertical(distance=-0.01, steps=5)', 8, True, True)[0][0], 'move_vertical')
         for source in ('move_vertical(distance=-0.03, steps=5)',
                        'move_vertical(distance=True, steps=5)',
-                       'move_vertical(distance=-0.01, steps=5)\nset_gripper(closed=False, steps=3)',
-                       'run_groot(instruction="move", steps=2)\nset_gripper(closed=False, steps=3)'):
+                       'move_vertical(distance=-0.01, steps=5)\nset_gripper(closed=False, steps=3)'):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 parse_program(source, 10, True, True)
         with self.assertRaises(ValueError):
             parse_program('move_vertical(distance=-0.01, steps=5)', 8, True, False)
+
+    def test_combined_open_and_pick_is_allowed_only_without_a_latched_object(self):
+        commands = parse_program('set_gripper(closed=False, steps=3)\nrun_groot(instruction="pick kettle", steps=5)',
+                                 8, True, True)
+        control = TransportControl()
+        control.update(assessment(phase='acquire', grasp='empty'), [])
+        control.authorize_program(commands)
+        control.update(assessment(phase='place'), [tray()])
+        with self.assertRaisesRegex(ValueError, 'only command'):
+            control.authorize_program(commands)
 
     def test_vertical_units_base_stop_and_actual_gripper_release(self):
         recorded = []

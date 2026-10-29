@@ -199,6 +199,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
                  placement_burst_steps=8):
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
+    invalid_decisions = 0
     last_inspection, repeated_inspections = None, 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
     while not tools.done and index < len(plan):
@@ -223,8 +224,18 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             decisions += 1
             if decision is None:
                 return 'api_budget'
-            validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
-                              getattr(tools, 'allow_vertical', False))
+            try:
+                validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
+                                  getattr(tools, 'allow_vertical', False))
+            except (ValueError, KeyError, SyntaxError, TypeError) as error:
+                invalid_decisions += 1
+                record({'event': 'invalid_decision', 'step': tools.steps, 'reason': str(error),
+                        'proposal': decision, 'consecutive_rejections': invalid_decisions,
+                        'feedback': 'No motion or memory updates executed. Correct this proposal using available tools and current limits.'})
+                if invalid_decisions >= 3:
+                    return 'invalid_decision_limit'
+                continue
+            invalid_decisions = 0
             memory.update(decision, tools.steps, decisions)
             record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
         record({'event': 'decision', 'subtask': step['id'], 'step': tools.steps, **decision})
@@ -272,6 +283,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
                                  getattr(tools, 'allow_vertical', False))
         try:
+            if transport is not None:
+                transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
             if mode == 'agent' and memory.navigation_bursts + navigation_count > max_navigation_bursts:
                 raise ValueError('Navigation burst budget exhausted')
@@ -441,7 +454,7 @@ def main():
                 stream.write(json.dumps(event) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution', 'invalid_decision'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -492,7 +505,7 @@ def main():
                     clip_file = f'perception-{request_number:03d}.npz'
                     np.savez_compressed(directory / clip_file, **clips, steps=np.asarray(clip_steps))
                     references.append({'label': 'temporal camera samples', 'path': clip_file})
-                decisions_used = sum(item['event'] == 'decision' for item in history)
+                decisions_used = sum(item['event'] in ('decision', 'invalid_decision') for item in history)
                 decisions_left = max(0, args.max_decisions - decisions_used)
                 calls_left = args.max_api_calls - api_calls
                 motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)

@@ -425,13 +425,19 @@ delta OSC controller. These are commanded deltas, not guaranteed displacement,
 collision avoidance, or contact sensing. No private object pose or contact state
 is used. Reobserve after movement; never repeatedly push against a surface.
 
-Release must be a separate decision containing only
+Release of a latched object must be a separate decision containing only
 `set_gripper(closed=False, steps=5)`. The runner requires a latched object,
 supported grasp, placement phase, and an explicit destination marked visible in
 that decision's memory updates. Muse must additionally establish support or a
 low, clear receptacle placement from current views. This visual judgment can be
 wrong; the gate does not certify support. Then verify stable placement and
 gripper clearance. Policy-open commands alone never release a latched object.
+Opening an empty, unlatched gripper during acquisition may be followed by a
+pickup request in the same program. Invalid model decisions return their audit
+and API usage without executing motion or updating memory. The runner records
+`invalid_decision` feedback for the next budgeted Muse request and stops after
+three consecutive invalid proposals. Execution-guard rejections are still
+reported as `recovery_required`; neither path relaxes the release guard.
 
 The first selected task is `ArrangeTea`: kettle and mug onto a tray, followed by
 closing cabinet doors. Its cabinet starts open. At the pinned RoboCasa revision
