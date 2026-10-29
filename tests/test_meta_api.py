@@ -5,12 +5,42 @@ import json
 import os
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+
+from core.policy_http import PolicyHTTPError, RetryableSupervisorError, SupervisorClient
 
 from inference.meta_api import MetaAPI, MetaAPIError, output_text
 
 
 class MetaAPITests(unittest.TestCase):
+    def test_connection_errors_are_retryable_without_leaking_reason_text(self):
+        with patch.dict(os.environ, {'MODEL_API_KEY': 'test-key'}):
+            api = MetaAPI()
+        for error in (URLError('secret URL'), TimeoutError(), ConnectionResetError()):
+            with self.subTest(error=type(error).__name__), patch('inference.meta_api.urlopen', side_effect=error):
+                with self.assertRaises(MetaAPIError) as caught:
+                    api.response('muse-spark-1.3', [])
+                self.assertTrue(caught.exception.retryable)
+                self.assertNotIn('secret URL', str(caught.exception))
+
+    def test_supervisor_client_preserves_failure_call_count_and_classification(self):
+        client = SupervisorClient('http://supervisor')
+        body = json.dumps({'error': 'Muse offline', 'retryable': True, 'api_calls': 2,
+                           'audit': [{'model': 'sam-3.1'}]})
+        with patch.object(client, '_request', side_effect=PolicyHTTPError(502, body)):
+            with self.assertRaises(RetryableSupervisorError) as caught:
+                client.ask('decide', {}, {})
+        self.assertEqual(caught.exception.api_calls, 2)
+        self.assertEqual(caught.exception.audit, [{'model': 'sam-3.1'}])
+        body = json.dumps({'error': 'Meta HTTP 401', 'retryable': False, 'api_calls': 1})
+        with patch.object(client, '_request', side_effect=PolicyHTTPError(502, body)):
+            with self.assertRaises(PolicyHTTPError):
+                client.ask('decide', {}, {})
+        with patch.object(client, '_request', side_effect=URLError('offline')):
+            with self.assertRaises(RetryableSupervisorError) as caught:
+                client.ask('decide', {'use_sam': True, 'api_calls_left': 1}, {})
+        self.assertEqual(caught.exception.api_calls, 1)
+
     def test_completed_empty_sam_result_is_valid_but_empty_muse_is_not(self):
         empty = {'status': 'completed', 'output': [
             {'type': 'message', 'content': [{'type': 'output_text', 'text': ''}]}]}
@@ -44,3 +74,4 @@ class MetaAPITests(unittest.TestCase):
         self.assertIn('unsupported argument', message)
         self.assertNotIn('secret-test-key', message)
         self.assertNotIn('abc123', message)
+        self.assertFalse(caught.exception.retryable)

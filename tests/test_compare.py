@@ -59,6 +59,10 @@ class CompareTests(unittest.TestCase):
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         self.assertEqual(muse[muse.index('--supervisor-stop-policy') + 1], 'continue')
         self.assertNotIn('--supervisor-stop-policy', baseline)
+        args.max_supervisor_failures = 5
+        muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
+        self.assertEqual(muse[muse.index('--max-supervisor-failures') + 1], '5')
+        self.assertNotIn('--max-supervisor-failures', baseline)
 
     def test_two_condition_report_includes_paired_result(self):
         row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,

@@ -30,6 +30,20 @@ fallback. The trace records `supervisor_stop_deferred`; results record the chose
 policy. This does not guarantee use of the full horizon or task success. The
 default `halt` policy still ends immediately on a model stop request.
 
+Transient Muse decision failures (connection errors, timeouts, rate limits, and
+selected upstream server errors) also allow short guarded continuation of the
+current subtask's last executed policy instruction before retrying with fresh
+images. `--max-supervisor-failures 3` permits three consecutive failure bursts;
+the fourth failure stops with `supervisor_failure_limit`. A successful response
+resets this counter; `0` disables recovery. Each failure consumes a decision and
+counts attempted upstream calls, with unknown token usage marked in the trace.
+Without a current subtask policy instruction, retries execute no motion. Manual
+release invalidates the cached instruction. Authentication, malformed requests,
+and unexpected server errors remain errors. Initial planning has no policy
+instruction to continue and still fails if its API request fails. Rebuild both
+`sim` and `supervisor` and recreate the supervisor service to use the structured
+failure protocol.
+
 Assets use `robocasa-thor-assets:/opt/robocasa-assets`; generated artifacts go
 under ignored `outputs/`. Keep model weights and API credentials out of this image.
 

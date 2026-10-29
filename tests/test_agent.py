@@ -7,7 +7,8 @@ import unittest
 import numpy as np
 
 from core.agent import parse_program, validate_decision, validate_plan
-from inference.meta_api import output_text
+from core.policy_http import RetryableSupervisorError
+from inference.meta_api import MetaAPIError, output_text
 from inference.supervisor import Supervisor, sam_boxes
 from sim.evaluate import make_policy_observation
 from sim.run_agent import EpisodeTools, handoff_context, run_subtasks
@@ -47,6 +48,96 @@ class FakeTools:
 
 
 class AgentTests(unittest.TestCase):
+    def test_failed_muse_request_preserves_completed_sam_usage(self):
+        class FakeAPI:
+            def response(self, model, *args, **kwargs):
+                if model == 'sam-3.1':
+                    return '', {'model': model, 'usage': {'output_tokens': 1}}
+                raise MetaAPIError('connection reset', retryable=True)
+
+        with self.assertRaises(MetaAPIError) as caught:
+            Supervisor(FakeAPI(), 'test-model').handle('decide', {
+                'api_calls_left': 2, 'use_sam': True,
+                'step': step('1', 'open cabinet'),
+            }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(caught.exception.api_calls, 2)
+        self.assertEqual(caught.exception.audit[0]['model'], 'sam-3.1')
+
+    def test_api_failure_continues_current_policy_then_retries_fresh_without_new_claims(self):
+        from core.transport_control import TransportControl
+
+        tools, events, observed = FakeTools(), [], []
+        tools.transport_control = TransportControl()
+        moving = decision(program='run_groot(instruction="Place mug on tray", steps=4)')
+        moving['assessment'].update(phase='carry', grasp='supported', held_object='mug')
+        replies = iter([moving, RetryableSupervisorError('connection reset'), decision('stop', '')])
+
+        def decide(*args):
+            observed.append(tools.steps)
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        reason = run_subtasks(tools, [step('mug', 'transfer mug')], 'agent', decide, events.append,
+                              subtask_budget_mode='episode')
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(observed, [0, 4, 20])
+        self.assertEqual(tools.instructions, ['Place mug on tray', 'Place mug on tray'])
+        self.assertEqual(tools.transport_control.held_object, 'mug')
+        self.assertFalse(tools.transport_control.release_ready)
+        self.assertEqual(len([e for e in events if e['event'] == 'supervisor_failure_continuation']), 1)
+        self.assertEqual(len([e for e in events if e['event'] == 'decision']), 2)
+
+    def test_api_outage_before_current_subtask_instruction_retries_without_motion(self):
+        tools, events = FakeTools(), []
+        def unavailable(*args):
+            raise RetryableSupervisorError('offline')
+        reason = run_subtasks(tools, [step('mug', 'transfer mug')], 'agent', unavailable, events.append,
+                              max_supervisor_failures=2)
+        self.assertEqual(reason, 'supervisor_failure_limit')
+        self.assertEqual(tools.steps, 0)
+        self.assertEqual(len([e for e in events if e['event'] == 'supervisor_unavailable']), 3)
+
+    def test_api_failure_continuation_respects_episode_limit(self):
+        tools, events = FakeTools(), []
+        tools.max_steps = 7
+        replies = iter([decision(), RetryableSupervisorError('offline')])
+        def decide(*args):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        reason = run_subtasks(tools, [step('a', 'open cabinet')], 'agent', decide, events.append,
+                              subtask_budget_mode='episode')
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 7)
+
+    def test_api_failure_does_not_catch_permanent_error(self):
+        tools = FakeTools()
+        def denied(*args):
+            raise RuntimeError('authentication denied')
+        with self.assertRaisesRegex(RuntimeError, 'authentication denied'):
+            run_subtasks(tools, [step('a', 'open cabinet')], 'agent', denied, lambda event: None)
+        self.assertEqual(tools.steps, 0)
+
+    def test_api_failures_still_consume_decision_budget_and_api_exhaustion_stops(self):
+        for final_reply, expected in ((RetryableSupervisorError('offline'), 'decision_budget'),
+                                      (None, 'api_budget')):
+            with self.subTest(reason=expected):
+                tools, events = FakeTools(), []
+                replies = iter([RetryableSupervisorError('offline'), final_reply])
+                def decide(*args):
+                    reply = next(replies)
+                    if isinstance(reply, Exception):
+                        raise reply
+                    return reply
+                reason = run_subtasks(tools, [step('a', 'open cabinet')], 'agent', decide, events.append,
+                                      max_decisions=2)
+                self.assertEqual(reason, expected)
+                self.assertEqual(tools.steps, 0)
+
     def test_advisory_stop_retries_last_policy_not_navigation_then_observes(self):
         tools, events, observations = FakeTools(), [], []
         navigation = decision(program='navigate(fixture="sink", steps=4)')

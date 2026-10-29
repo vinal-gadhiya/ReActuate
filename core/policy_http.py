@@ -2,13 +2,25 @@
 
 from io import BytesIO
 import json
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import numpy as np
 
 PROTOCOL_VERSION = 1
 MAX_BYTES = 32 * 1024 * 1024
+
+
+class PolicyHTTPError(RuntimeError):
+    def __init__(self, status, body):
+        super().__init__(f'Policy HTTP {status}: {body[:4096]}')
+        self.status, self.body = status, body
+
+
+class RetryableSupervisorError(RuntimeError):
+    def __init__(self, message, api_calls=1, audit=None):
+        super().__init__(message)
+        self.api_calls, self.audit = api_calls, audit or []
 
 
 def encode_arrays(values):
@@ -50,7 +62,7 @@ class PolicyClient:
                     raise RuntimeError('Policy response exceeds size limit')
                 return result
         except HTTPError as error:
-            raise RuntimeError(f'Policy HTTP {error.code}: {error.read(4096).decode()}') from error
+            raise PolicyHTTPError(error.code, error.read(MAX_BYTES).decode(errors='replace')) from error
 
     def metadata(self):
         metadata = json.loads(self._request('/metadata'))
@@ -68,4 +80,22 @@ class SupervisorClient(PolicyClient):
             raise ValueError('Unknown supervisor operation')
         payload = dict(images)
         payload['__context'] = np.asarray(json.dumps(context))
-        return json.loads(self._request('/' + operation, encode_arrays(payload)))
+        try:
+            return json.loads(self._request('/' + operation, encode_arrays(payload)))
+        except PolicyHTTPError as error:
+            try:
+                detail = json.loads(error.body)
+            except (ValueError, TypeError):
+                detail = {}
+            if error.status in (502, 503, 504) and detail.get('retryable') is True:
+                calls = detail.get('api_calls', 1)
+                if type(calls) is not int or not 1 <= calls <= 2:
+                    raise ValueError('Invalid supervisor failure call count') from error
+                raise RetryableSupervisorError(str(detail.get('error', 'Supervisor unavailable')),
+                                               calls, detail.get('audit', [])) from error
+            raise
+        except (URLError, TimeoutError, ConnectionError) as error:
+            # A missing response may hide both SAM and Muse attempts. Reserve the
+            # maximum allowed by this request rather than refunding unknown usage.
+            calls = min(context.get('api_calls_left', 1), 2 if context.get('use_sam', True) else 1)
+            raise RetryableSupervisorError(f'Supervisor connection failed ({type(error).__name__})', calls) from error

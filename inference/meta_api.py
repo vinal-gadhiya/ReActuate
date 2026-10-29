@@ -20,6 +20,12 @@ def image_part(frame):
 class MetaAPIError(RuntimeError):
     """An upstream error with a bounded, credential-redacted diagnostic."""
 
+    def __init__(self, message, retryable=False):
+        super().__init__(message)
+        self.retryable = retryable
+        self.api_calls = 1
+        self.audit = []
+
 
 def output_text(response, allow_empty=False):
     if response.get('status') != 'completed':
@@ -81,12 +87,16 @@ class MetaAPI:
             detail = detail.replace(self.key, '[REDACTED]')
             detail = re.sub(r'data:(?:image|video)/[^\s"\\]+', '[MEDIA]', detail)
             detail = re.sub(r'(?i)Bearer\s+[^\s"\\]+', 'Bearer [REDACTED]', detail)
-            raise MetaAPIError(f'{model}: Meta HTTP {error.code}: {detail[:1200]}') from None
+            raise MetaAPIError(f'{model}: Meta HTTP {error.code}: {detail[:1200]}',
+                               retryable=error.code in (429, 500, 502, 503, 504)) from None
         except TimeoutError:
             timeout = self.sam_timeout if model == 'sam-3.1' else self.timeout
-            raise MetaAPIError(f'{model}: Meta request timed out after {timeout}s; no automatic retry') from None
-        except URLError:
-            raise MetaAPIError(f'{model}: Meta request connection failed; no automatic retry') from None
+            raise MetaAPIError(f'{model}: Meta request timed out after {timeout}s', retryable=True) from None
+        except (URLError, ConnectionError) as error:
+            reason = getattr(error, 'reason', error)
+            # Report the category without exposing URLs, credentials, or payloads.
+            raise MetaAPIError(f'{model}: Meta request connection failed ({type(reason).__name__})',
+                               retryable=True) from None
         if len(raw) > 8 * 1024 * 1024:
             raise RuntimeError('Meta response exceeds size limit')
         response = json.loads(raw)

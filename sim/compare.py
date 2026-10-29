@@ -52,6 +52,7 @@ def run_command(args, condition, seed, output, plan=None):
     if condition != 'baseline':
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
         command += ['--supervisor-stop-policy', getattr(args, 'supervisor_stop_policy', 'halt')]
+        command += ['--max-supervisor-failures', str(getattr(args, 'max_supervisor_failures', 3))]
         command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
         if getattr(args, 'hybrid_control', False):
             command += ['--hybrid-control']
@@ -150,6 +151,7 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=90)
     parser.add_argument('--max-api-calls', type=int, default=200)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-supervisor-failures', type=int, default=3)
     parser.add_argument('--supervisor-stop-policy', choices=('halt', 'continue'), default='halt',
                         help='Simulator only: honor Muse stop, or continue short guarded policy bursts within remaining budgets')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
@@ -164,6 +166,8 @@ def main():
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if args.max_supervisor_failures < 0:
+        parser.error('--max-supervisor-failures must be nonnegative')
     if (not args.conditions or args.conditions[0] != 'baseline' or len(set(args.conditions)) != len(args.conditions)
             or ('muse_sam' in args.conditions and ('muse' not in args.conditions
                 or args.conditions.index('muse') > args.conditions.index('muse_sam')))):

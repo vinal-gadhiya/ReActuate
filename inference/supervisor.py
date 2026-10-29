@@ -376,6 +376,15 @@ class Supervisor:
         if operation == 'decide':
             validate_plan({'steps': [context['step']]})
         audit = []
+
+        def api_response(*args, **kwargs):
+            try:
+                return self.api.response(*args, **kwargs)
+            except MetaAPIError as error:
+                error.api_calls = len(audit) + 1
+                error.audit = list(audit)
+                raise
+
         grounding = None
         use_sam = context.get('use_sam', self.use_sam)
         if type(use_sam) is not bool:
@@ -395,7 +404,7 @@ class Supervisor:
             tracking = (context.get('sam_video_enabled', True) and query.get('mode') == 'track'
                         and clip is not None and len(clip) >= 2)
             media = video_part(clip) if tracking else image_part(frame)
-            text, usage = self.api.response('sam-3.1', [
+            text, usage = api_response('sam-3.1', [
                 {'type': 'input_text', 'text': target}, media,
             ])
             audit.append(usage)
@@ -428,7 +437,7 @@ class Supervisor:
         prompt = '\n\n'.join([MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
                                 PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
-        result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
+        result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
         validation_error = None
         if operation == 'plan':
@@ -486,7 +495,11 @@ def make_handler(supervisor):
                 context = json.loads(images.pop('__context').item())
                 self.reply(200, supervisor.handle(self.path[1:], context, images))
             except MetaAPIError as error:
-                self.reply(502, {'error': str(error)})
+                self.log_message('Upstream failure: retryable=%s attempted_calls=%d error=%s',
+                                 error.retryable, error.api_calls, str(error))
+                self.reply(502, {'error': str(error), 'retryable': error.retryable,
+                                 'api_calls': error.api_calls, 'audit': error.audit,
+                                 'usage_unknown': True})
             except (ValueError, KeyError, SyntaxError) as error:
                 self.reply(400, {'error': str(error)})
             except Exception:
