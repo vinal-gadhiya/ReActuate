@@ -20,11 +20,18 @@ MEMORY_PROMPT = '''Maintain explicit episode-local visual memory on every decide
 response. assessment reports phase (access/acquire/carry/locate_destination/place/
 recover/unknown), held_object (empty string if unknown), grasp (supported/uncertain/
 empty/lost), destination, information_needed (empty if none), and concise evidence.
+Assess whether ANY object is held, independently of the planned target. An
+object held for a different pending subgoal is still held; absence of the active
+target in the fingers is not evidence that the gripper is empty. Report the
+actual held object. An object from another pending subgoal may be useful progress,
+not wrong-object acquisition; evaluate it against the ENTIRE original goal.
+If fingers or their contents are occluded, report uncertain rather than empty.
 Do not confuse full-transfer incompletion with absence of a grasp. Compare temporal
 samples: an object between fingers while shelf/background recedes can support a
 pickup; gripper closure alone cannot. Preserve uncertainty and revise earlier
-claims when evidence changes. If a supported lemon grasp is lost, record lost
-and reacquire that lemon; a garlic-like object is a distractor, not a substitute.
+claims when evidence changes. If a supported grasp is visibly lost, record lost;
+do not silently substitute a similar-looking object. Recover only if the
+available controller and run rules support that recovery.
 
 memory_updates holds up to 12 evidence-backed semantic object/fixture records:
 name, kind, location, status, evidence. Name instances consistently. Locations are
@@ -47,11 +54,12 @@ run. Inspection refreshes sensors at the same pose without advancing physics;
 it does not explore a new area. Never claim inspection alone moved the camera
 or revealed a new vantage point. A missing object is occluded/uncertain unless temporal
 evidence supports a drop; do not assert loss solely because it left the frame.
-When grasp is supported and the correct destination is visible, switch phase to
-place and use a catalog-style placement instruction such as "Place the yellow
-pitcher on the dining counter." Do not keep requesting acquisition from its old
-source. Use the reduced decision_step_limit to observe approach and retention
-frequently. Do not declare placement from destination visibility alone.
+When grasp is supported, use a destination-relevant placement instruction such
+as "Place the yellow pitcher on the dining counter" instead of requesting
+acquisition from its old source. Stay in carry/locate_destination until the
+object is aligned over the correct support/receptacle; only then select place.
+A visible destination alone does not establish arrival, alignment, or placement.
+Use short bursts to observe approach and retention frequently.
 
 When current views are insufficient, navigate(fixture="sink", steps=30) requests
 a bounded GR00T NavigateKitchen burst to an observed/remembered fixture, keeping
@@ -80,7 +88,9 @@ Keep evidence concise; do not restate every budget or every camera on every turn
 PLAN_PROMPT = '''You plan short-horizon instructions for a frozen PandaOmron GR00T
 policy in RoboCasa. Decompose the original task into 1–10 physically meaningful,
 grounded subtasks, normally 2–6. Preserve object attributes, spatial references,
-ordering, and the complete original goal. Prefer actionable atomic goals such as
+true dependency/strict-order constraints, and the complete original goal. The
+initial listing order is provisional for independent transfers: prefer a clearly
+visible, reachable goal object over a hidden one. Prefer actionable atomic goals such as
 opening a drawer or placing a named object, not arbitrary joint commands or an
 assumption that GR00T understands precise distances. Each subtask needs a short
 instruction, a simple noun phrase target for SAM, visible success criteria, and
@@ -168,7 +178,7 @@ against the current subtask's success_criteria and the original task. Output:
 - complete only when current observations support THIS subtask's completion;
 - continue when more execution or a recovery is useful;
 - inspect to request another perception query without moving;
-- replan to replace ONLY the remaining suffix when the plan is invalid;
+- replan to replace ONLY the remaining suffix when dependencies, visibility, or a useful grasp favor a different order;
 - stop when evidence or remaining budgets cannot support useful execution.
 State visible evidence and uncertainty. A closed gripper does not prove a grasp;
 a partially open door may or may not meet the subtask criterion. SAM boxes identify
@@ -241,8 +251,12 @@ Keep destination name consistent between assessment and memory. After release,
 report the grasp empty unless a new lift is observed. If a carried object is
 visibly lost, report lost and stop: this trial prioritizes prevention and does not
 assume GR00T can recover floor drops. Do not mark access/door handles as cargo.
-Opening an empty, unlatched gripper during acquisition is preparation, not cargo
-release: set_gripper(closed=False, ...) may precede run_groot in that case.
+Do NOT issue set_gripper(closed=False) to prepare or retry acquisition, even if
+you believe the gripper empty. Such commands are disabled in hybrid mode: they
+can discard a useful object misclassified empty because it is not the active target. Let GR00T
+manage acquisition opening/closing. Direct opening is reserved for guarded
+cargo placement or releasing a fixture handle in phase=access, never as a
+routine prefix to a pickup/navigation burst.
 When transport_control.held_object_latch is nonempty, release must be the only
 command in the program after a fresh placement observation.
 '''
@@ -259,6 +273,57 @@ def sam_boxes(text, width, height):
         if box['w'] == width and box['h'] == height and 0 <= box['x1'] <= box['x2'] < width and 0 <= box['y1'] <= box['y2'] < height:
             boxes.append(box)
     return boxes[:30]
+
+
+FLEXIBLE_PLAN_PROMPT = '''Plan from the whole goal and the actual physical state,
+not from loyalty to the current step. Reorder independent unfinished subgoals
+when another required object is visible/reachable or already held. Do not drop,
+undo, or abandon useful progress solely to enforce the original listing order.
+Preserve real constraints: access before retrieval, a receptacle before filling,
+safe cooking order, explicit strict-order requirements, and task-specific
+dependencies. Do not use reordering to omit objects, change destinations, invent
+success, substitute distractors, or reopen completed work.
+
+At each boundary, review original_goal, completed_steps, the entire unfinished
+suffix, current views, and any held object. Derive the remaining goal predicates
+and their prerequisites from this task rather than using a fixed object order.
+Distinguish a true dependency, an explicit strict sequence, and a provisional
+listing order. Do not infer that objectives commute merely because both are
+transfers: consider containment, access, contents, stability, and side effects.
+Among executable pending goals, prefer one that preserves a supported useful
+grasp; otherwise favor grounded target/destination evidence and reachable access
+over speculative search. Visibility alone does not establish reachability.
+
+If a held object contributes to ANY unfinished goal, preserve that grasp and
+finish the applicable goal when its prerequisites are met. Do not discard it
+solely because a different goal was first in the plan. If its destination is not
+localized, retain it while gathering supported information. If prerequisites
+prevent proceeding, explain the conflict and choose a supported safe action or
+stop; do not invent a release location. An unrelated distractor is not progress.
+If grasp is uncertain, inspect retention with no opening command; absence of
+the active target does not establish an empty gripper.
+
+During decide, use status=replan with an empty program to make the change
+explicit. replacement_steps replaces the entire UNFINISHED suffix, not just the
+current step. Use new unique IDs; leave completed_steps intact. Put the newly
+selected executable goal first, retain every other unfinished requirement, and
+keep dependent goals after their prerequisites. Use placement-only instructions
+for an already-held object rather than requesting acquisition again. If the next object's location
+is unresolved, include an executable inspection/access prerequisite after the
+current useful transfer so its completion does not depend on knowing a hidden
+object's pose. Never mark an unachieved goal complete to skip ahead or duplicate
+a reordered goal later. Replanning itself executes no motion and does not reset
+the scene, memory, or grasp latch. Explain the visible opportunity and which
+constraints permit the reorder. Read replans_left; stop proposing replans when
+it is zero. A useful instruction remains stable while its transfer progresses.
+
+Repeatedly saying "no pickup/no approach" is evidence to reconsider the plan,
+not justification for more identical bursts. An unchanged inspection at the
+same pose is not new evidence. Review other pending goal objects before another
+retry or another navigation to the same fixture. If none can be grounded and no
+supported information-gathering action helps, stop rather than spend the budget
+on repetition. These choices are visual hypotheses, not proof of competence.
+'''
 
 
 class Supervisor:
@@ -343,7 +408,7 @@ class Supervisor:
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
         prompt = '\n\n'.join([MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
-                                PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT])
+                                PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
         schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = self.api.response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)

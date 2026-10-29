@@ -396,6 +396,29 @@ task failures. Connection errors and timeouts are reported separately.
 
 ## Hybrid transport and placement trial
 
+Planning uses dependency-based order for independent transfers. A visible or
+already-held object required by the full goal can be handled before an unlocalized
+object from the provisional first step. The planning policy is object-agnostic:
+it derives outstanding requirements and dependencies from each task and the
+observed state. A useful out-of-order grasp is not a reason to discard the object.
+True physical, safety, and explicit strict-order constraints still apply; two
+transfers are not assumed interchangeable without checking their side effects.
+
+Muse makes a reorder explicit with `status=replan`, an empty program, and a
+complete replacement of the unfinished suffix using new IDs. Completed work
+stays intact, every outstanding transfer stays represented, and no scene reset
+or grasp release occurs during replanning. The prompt instructs Muse to finish
+transport of a useful held object instead of returning to its old source or
+claiming the skipped target complete. `replans_left` reports the remaining
+replanning budget. This is prompt guidance plus the existing suffix-replan
+mechanism; it does not establish better visual grounding or successful execution.
+The selected task below is a smoke test, not a task-specific controller branch
+or evidence of generalization. Evaluate the same frozen prompts across held-out
+tasks and seeds, including order-sensitive tasks; preserve per-task regressions
+alongside improvements. Hybrid placement tools still support a narrower class
+of transfers than the planner's task vocabulary, and must not be treated as
+general controllers for pouring, force control, or unsupported manipulations.
+
 `--hybrid-control` on `sim.compare` enables action arbitration for Muse conditions
 only. It does not train or replace GR00T. The baseline retains original actions.
 Use `--conditions baseline muse` to test without SAM first.
@@ -432,8 +455,12 @@ that decision's memory updates. Muse must additionally establish support or a
 low, clear receptacle placement from current views. This visual judgment can be
 wrong; the gate does not certify support. Then verify stable placement and
 gripper clearance. Policy-open commands alone never release a latched object.
-Opening an empty, unlatched gripper during acquisition may be followed by a
-pickup request in the same program. Invalid model decisions return their audit
+Direct gripper opening during acquisition is disabled, even when Muse claims
+the gripper empty. Absence of the planned target does not establish absence of
+another held object. Let GR00T manage acquisition; direct opening is reserved
+for guarded cargo placement or unlatched fixture-handle release in access phase.
+Muse must assess any held object independently of its active subtask target.
+Invalid model decisions return their audit
 and API usage without executing motion or updating memory. The runner records
 `invalid_decision` feedback for the next budgeted Muse request and stops after
 three consecutive invalid proposals. Execution-guard rejections are still

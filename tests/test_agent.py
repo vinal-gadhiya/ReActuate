@@ -47,6 +47,45 @@ class FakeTools:
 
 
 class AgentTests(unittest.TestCase):
+    def test_reorder_preserves_useful_grasp_completed_prefix_and_all_remaining_goals(self):
+        for deferred, held, destination, finish in (
+            ('kettle', 'mug', 'tray', 'close cabinet'),
+            ('apple', 'banana', 'fruit bowl', 'close drawer'),
+            ('spatula', 'spoon', 'utensil holder', 'finish organizing'),
+        ):
+            with self.subTest(deferred=deferred, held=held):
+                self._check_reorder(deferred, held, destination, finish)
+
+    def _check_reorder(self, deferred, held, destination, finish):
+        from core.transport_control import TransportControl
+
+        tools, events, observed_plans = FakeTools(), [], []
+        tools.transport_control = TransportControl()
+        original = [step('access', 'open access'), step('deferred', f'transfer {deferred}'),
+                    step('held', f'transfer {held}'), step('finish', finish)]
+        placement = f'Place the held {held} at the {destination}'
+        replacement = [step('held-first', placement),
+                       step('deferred-later', f'transfer {deferred}'), step('finish-last', finish)]
+        reorder = decision('replan', '', replacement)
+        reorder['assessment'] = {'phase': 'carry', 'grasp': 'supported', 'held_object': held,
+                                 'destination': destination, 'information_needed': '',
+                                 'evidence': 'Required object lifted while another target remains unlocalized.'}
+        place_held = decision(program=f'run_groot(instruction={placement!r}, steps=4)')
+        place_held['assessment'] = dict(reorder['assessment'])
+        replies = iter([decision('complete', ''), reorder, place_held, decision('stop', '')])
+
+        def decide(plan, index, *args):
+            observed_plans.append(([item['id'] for item in plan], index, tools.steps))
+            return next(replies)
+
+        reason = run_subtasks(tools, original, 'agent', decide, events.append)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(observed_plans[2], (['access', 'held-first', 'deferred-later', 'finish-last'], 1, 0))
+        self.assertEqual(tools.steps, 4)
+        self.assertEqual(tools.instructions, [placement])
+        self.assertEqual(tools.transport_control.held_object, held)
+        self.assertEqual([event['subtask'] for event in events if event['event'] == 'subtask_transition'], ['access'])
+
     def test_invalid_model_program_returns_feedback_without_motion_then_recovers(self):
         tools, events = FakeTools(), []
         invalid = decision(program='env.step()')
@@ -296,6 +335,10 @@ class AgentTests(unittest.TestCase):
             self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
             self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
             self.assertIn('Do not decompose these into separate reach', prompt)
+            self.assertIn('Reorder independent unfinished subgoals', prompt)
+            self.assertIn('replacement_steps replaces the entire UNFINISHED suffix', prompt)
+            self.assertIn('If a held object contributes to ANY unfinished goal', prompt)
+            self.assertIn('Do not infer that objectives commute', prompt)
         self.assertEqual(context['simulator_context']['policy_reference']['instruction_catalog'], {'client_copy': True})
 
     def test_sam_override_controls_calls_and_forwards_boxes_to_muse(self):

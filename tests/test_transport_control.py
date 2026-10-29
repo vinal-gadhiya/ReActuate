@@ -88,15 +88,29 @@ class TransportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_program('move_vertical(distance=-0.01, steps=5)', 8, True, False)
 
-    def test_combined_open_and_pick_is_allowed_only_without_a_latched_object(self):
+    def test_acquisition_open_is_blocked_even_when_model_claims_empty(self):
         commands = parse_program('set_gripper(closed=False, steps=3)\nrun_groot(instruction="pick kettle", steps=5)',
                                  8, True, True)
         control = TransportControl()
         control.update(assessment(phase='acquire', grasp='empty'), [])
-        control.authorize_program(commands)
+        with self.assertRaisesRegex(ValueError, 'direct opening during acquisition'):
+            control.authorize_program(commands)
         control.update(assessment(phase='place'), [tray()])
         with self.assertRaisesRegex(ValueError, 'only command'):
             control.authorize_program(commands)
+
+    def test_wrong_target_grasp_is_still_protected(self):
+        control = TransportControl()
+        held = {**assessment(phase='acquire'), 'held_object': 'mug'}
+        control.update(held, [])
+        self.assertEqual(control.held_object, 'mug')
+        with self.assertRaisesRegex(ValueError, 'Release blocked'):
+            control.authorize('set_gripper', {'closed': False})
+
+    def test_unlatched_handle_release_remains_available_during_access(self):
+        control = TransportControl()
+        control.update(assessment(phase='access'), [])
+        control.authorize('set_gripper', {'closed': False})
 
     def test_vertical_units_base_stop_and_actual_gripper_release(self):
         recorded = []

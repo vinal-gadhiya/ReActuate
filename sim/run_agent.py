@@ -517,6 +517,8 @@ def main():
                     'observation_step': tools.steps, 'request_number': request_number,
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
+                    'replans_left': max(0, args.max_replans - sum(
+                        item['event'] == 'decision' and item.get('status') == 'replan' for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,

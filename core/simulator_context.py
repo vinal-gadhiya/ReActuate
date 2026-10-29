@@ -37,6 +37,7 @@ SIMULATOR_GUIDE = {
     'execution_rules': [
         'Subtasks execute in the original task environment. Atomic-task names do not create or switch environments.',
         'Physical scene state persists across subtask transitions and replans.',
+        'Independent unfinished goals may be reordered to use a visible or already-held required object. Preserve true dependencies, completed work, and every remaining goal.',
         'Only listed tools exist. navigate wraps a fallible GR00T language request; no navigation planner, move_eef, IK solver, or generic pick/place primitive is installed.',
         'A run_groot instruction is a request to a fallible policy, not a guaranteed skill.',
         'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',

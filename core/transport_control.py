@@ -39,8 +39,13 @@ class TransportControl:
     def authorize(self, name, arguments):
         if self.loss_detected:
             raise ValueError('Object loss reported; stop this prevention-only trial, do not attempt floor recovery')
-        if name == 'set_gripper' and not arguments['closed'] and self.held_object and not self.release_ready:
-            raise ValueError('Release blocked: require supported grasp, place phase, and a visible named destination')
+        if name == 'set_gripper' and not arguments['closed']:
+            if not self.held_object and self.phase == 'access':
+                return  # Handle release is distinct from cargo acquisition.
+            if not self.release_ready:
+                raise ValueError('Release blocked: direct opening during acquisition/uncertainty is disabled; '
+                                 'let GR00T manage acquisition. Cargo release requires a supported grasp, '
+                                 'place phase, and a visible named destination')
         if name == 'move_vertical' and not (self.held_object and self.phase == 'place' and self.release_ready):
             raise ValueError('Vertical placement requires a latched object and current placement evidence')
 
