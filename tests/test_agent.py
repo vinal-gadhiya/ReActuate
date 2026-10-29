@@ -48,6 +48,18 @@ class FakeTools:
 
 
 class AgentTests(unittest.TestCase):
+    def test_visible_destination_does_not_shorten_gr00t_only_skill(self):
+        tools, events = FakeTools(), []
+        proposal = decision(program='run_groot(instruction="Place mug on tray", steps=30)')
+        proposal['assessment'].update(phase='place', grasp='supported', held_object='mug', destination='tray')
+        proposal['memory_updates'] = [{'name': 'tray', 'kind': 'object', 'status': 'visible',
+                                       'location': 'counter', 'evidence': 'Tray visible.'}]
+        reason = run_subtasks(tools, [step('mug', 'transfer mug')], 'agent',
+                              lambda *args: proposal, events.append, subtask_budget_mode='episode')
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 30)
+        self.assertFalse(any(e['event'] == 'bounded_execution' for e in events))
+
     def test_failed_muse_request_preserves_completed_sam_usage(self):
         class FakeAPI:
             def response(self, model, *args, **kwargs):

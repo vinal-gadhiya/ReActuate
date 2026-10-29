@@ -120,7 +120,7 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(reason, 'perception_stall')
         self.assertEqual(tools.steps, 0)
 
-    def test_new_destination_evidence_shortens_burst_before_first_placement_motion(self):
+    def test_new_destination_evidence_keeps_gr00t_only_execution_interval(self):
         tools, events = FakeTools(), []
         placing = decision(program='run_groot(instruction="Place pitcher on dining counter.", steps=20)')
         placing['assessment'].update(phase='carry', held_object='pitcher', grasp='supported', destination='dining counter')
@@ -129,8 +129,8 @@ class SceneMemoryTests(unittest.TestCase):
         replies = iter([placing, decision('stop', '')])
         run_subtasks(tools, [step('transfer', 'place pitcher')], 'agent', lambda *args: next(replies), events.append,
                      subtask_budget_mode='episode', placement_burst_steps=8)
-        self.assertEqual(tools.steps, 8)
-        self.assertTrue(any(event['event'] == 'bounded_execution' for event in events))
+        self.assertEqual(tools.steps, 20)
+        self.assertFalse(any(event['event'] == 'bounded_execution' for event in events))
 
     def test_tracking_ids_and_frames_are_preserved_and_bad_records_rejected(self):
         text = ('<1f>7<|box;x1=1;y1=1;x2=4;y2=3;w=6;h=4|>'

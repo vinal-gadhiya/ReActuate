@@ -348,7 +348,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'recovery_unavailable'
             continue
         rejected = 0
-        motion_left = placement_burst_steps if mode == 'agent' and memory.near_destination() else decision_steps
+        motion_left = (placement_burst_steps if transport is not None and memory.near_destination()
+                       else decision_steps)
         if transport is not None and transport.held_object:
             motion_left = min(motion_left, 16)
         for name, arguments in commands:
@@ -421,8 +422,6 @@ def main():
     parser.add_argument('--placement-burst-steps', type=int, default=8)
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
                         help='Agent only: enforce planned subtask ceilings, or use the remaining episode budget')
-    parser.add_argument('--allow-gripper', action='store_true', help='Enable the guarded delta-OSC gripper primitive')
-    parser.add_argument('--hybrid-control', action='store_true', help='Agent only: grasp latch, placement base stop, bounded vertical control and explicit release')
     parser.add_argument('--require-unseen-composite', action='store_true', help='Require task in pinned composite_unseen registry and outside pretrain300')
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
@@ -448,8 +447,6 @@ def main():
         parser.error('fixed mode requires --plan')
     if args.mode == 'baseline' and args.plan is not None:
         parser.error('baseline mode always uses the original task instruction')
-    if args.hybrid_control and args.mode != 'agent':
-        parser.error('--hybrid-control requires agent mode; baseline actions remain unmodified')
     if args.plan_only and args.mode != 'agent':
         parser.error('--plan-only requires agent mode')
     starting_plan = None
@@ -586,6 +583,7 @@ def main():
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,
                     'supervisor_stop_policy': args.supervisor_stop_policy,
+                    'control_owner': 'gr00t',
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
                                      'navigate': memory.navigation_bursts < args.max_navigation_bursts,
@@ -629,7 +627,7 @@ def main():
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
                 video.append_data(observation[camera_keys[0]])
                 tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps,
-                                     args.allow_gripper, directory, args.hybrid_control)
+                                     False, directory, False)
                 simulator_context = build_simulator_context(
                     args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
                     ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
@@ -654,10 +652,6 @@ def main():
                 (directory / 'plan.json').write_text(json.dumps({'steps': plan}, indent=2) + '\n')
 
                 def decide(active_plan, index, spent, limit):
-                    if memory.near_destination():
-                        limit = min(limit, args.placement_burst_steps)
-                    if tools.transport_control is not None and tools.transport_control.held_object:
-                        limit = min(limit, 16)
                     return ask('decide', {
                         'step': active_plan[index], 'subtask_steps_used': spent,
                         'completed_steps': active_plan[:index], 'remaining_steps': active_plan[index + 1:],
@@ -681,7 +675,7 @@ def main():
                     'api_calls': api_calls, 'wall_seconds': time.monotonic() - started,
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
-                    'hybrid_control': args.hybrid_control,
+                    'hybrid_control': False, 'control_owner': 'gr00t',
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,

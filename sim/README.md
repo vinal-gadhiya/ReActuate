@@ -19,13 +19,19 @@ or clip tracking, and request bounded fixture navigation before resuming a pendi
 transfer. Motion diagnostics compare declared robot measurements and rendered
 images; they do not query private object poses or certify task progress.
 
+GR00T owns all control actions. The CLI no longer offers `--hybrid-control` or
+`--allow-gripper`: no action arbitration, forced grasp latch, manual release,
+base/orientation freeze, or Cartesian placement corrections are applied. Muse
+and SAM provide planning, visual memory, verification, and language corrections.
+Destination visibility does not automatically shorten a policy execution burst.
+
 `run_agent.py` and `compare.py` accept `--supervisor-stop-policy continue` for
 simulation comparisons that should keep trying within the episode budget. A Muse
 `stop` request then retries the last successfully executed `run_groot` instruction
 for the current subtask for at most 16 steps, followed by another supervisor
 decision on the resulting observation. Each request remains subject to the usual
-shorter placement limits, control guards, and decision/API budgets. Navigation,
-manual release, and instructions from prior subtasks are never replayed by this
+program validation and decision/API budgets. Navigation
+and instructions from prior subtasks are never replayed by this
 fallback. The trace records `supervisor_stop_deferred`; results record the chosen
 policy. This does not guarantee use of the full horizon or task success. The
 default `halt` policy still ends immediately on a model stop request.
@@ -37,8 +43,8 @@ images. `--max-supervisor-failures 3` permits three consecutive failure bursts;
 the fourth failure stops with `supervisor_failure_limit`. A successful response
 resets this counter; `0` disables recovery. Each failure consumes a decision and
 counts attempted upstream calls, with unknown token usage marked in the trace.
-Without a current subtask policy instruction, retries execute no motion. Manual
-release invalidates the cached instruction. Authentication, malformed requests,
+Without a current subtask policy instruction, retries execute no motion.
+Authentication, malformed requests,
 and unexpected server errors remain errors. Initial planning has no policy
 instruction to continue and still fails if its API request fails. Rebuild both
 `sim` and `supervisor` and recreate the supervisor service to use the structured

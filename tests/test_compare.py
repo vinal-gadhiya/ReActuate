@@ -52,7 +52,7 @@ class CompareTests(unittest.TestCase):
         baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         self.assertNotIn('--hybrid-control', baseline)
-        self.assertIn('--hybrid-control', muse)
+        self.assertNotIn('--hybrid-control', muse)
         self.assertIn('--require-unseen-composite', baseline)
         self.assertIn('--require-unseen-composite', muse)
         args.supervisor_stop_policy = 'continue'

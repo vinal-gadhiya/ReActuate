@@ -208,10 +208,10 @@ the original task instruction is retained separately. Pending chunk actions are
 discarded at every tool boundary. The current GR00T adapter uses only the current
 observation, so it has no cross-subtask temporal history to reset.
 
-Add `--allow-gripper` only when testing direct gripper interventions. This makes
-the controller-checked tool available; it does not guarantee a valid grasp or
-prevent a held object from falling when released. No world-space corrections are
-issued by this primitive.
+GR00T owns all arm, base, orientation, and gripper actions. Muse/SAM plan,
+remember visual observations, detect execution mistakes, and change language
+instructions. Direct gripper and vertical tools are disabled. The former
+`--allow-gripper` and `--hybrid-control` CLI flags have been removed.
 
 ## 6. Compare against controlled baselines
 
@@ -391,10 +391,11 @@ provider's reason when available. They remain errors; increasing the cap does
 not guarantee completion. An error artifact retains the last step and memory.
 SAM requests default to a 180-second timeout (`META_SAM_TIMEOUT`, maximum 240);
 the supervisor client allows 480 seconds for the combined SAM/Muse request.
-Timeouts remain errors and are not automatically retried or counted as policy
-task failures. Connection errors and timeouts are reported separately.
+Transient decision failures permit bounded execution of the current subtask's
+last policy instruction, followed by a fresh Muse request. See
+`--max-supervisor-failures` in [the simulation guide](../sim/README.md).
 
-## Hybrid transport and placement trial
+## GR00T control with visual planning and correction
 
 Planning uses dependency-based order for independent transfers. A visible or
 already-held object required by the full goal can be handled before an unlocalized
@@ -422,56 +423,24 @@ that the task could not have succeeded with more execution.
 The selected task below is a smoke test, not a task-specific controller branch
 or evidence of generalization. Evaluate the same frozen prompts across held-out
 tasks and seeds, including order-sensitive tasks; preserve per-task regressions
-alongside improvements. Hybrid placement tools still support a narrower class
-of transfers than the planner's task vocabulary, and must not be treated as
-general controllers for pouring, force control, or unsupported manipulations.
+alongside improvements. The supervisor does not add manipulation skills to GR00T.
 
-`--hybrid-control` on `sim.compare` enables action arbitration for Muse conditions
-only. It does not train or replace GR00T. The baseline retains original actions.
-Use `--conditions baseline muse` to test without SAM first.
+Use `--conditions baseline muse` to test without SAM first, then compare against
+`muse_sam`. All conditions pass GR00T action values through unchanged, including
+its predicted release actions. There are no grasp latches, base/orientation
+overrides, or translation clamps in the CLI execution path. Merely seeing a
+destination no longer imposes an eight-step feedback interval. Muse can choose
+a shorter interval for a concrete ambiguity, but should preserve useful skills.
 
-After Muse reports a visually supported object grasp in an acquisition/transport
-phase, the runner latches the gripper closed and overrides subsequent policy-open
-commands. Uncertainty does not clear the latch. Access/handle manipulation does
-not automatically latch. Transport feedback intervals are capped at 16 steps;
-near-destination intervals retain the shorter placement limit. A visible loss
-while latched ends the trial with `object_loss_reported`, rather than assuming
-floor recovery is available. This cannot prevent physical slips or collisions,
-and protection begins only after a supported grasp is reported.
+When GR00T acts on the wrong fixture, Muse compares current observations against
+time-stamped scene memory and optional SAM candidates, requests supported fixture
+navigation through GR00T, then verifies arrival before resuming the pending task.
+SAM boxes and historical sightings do not provide metric routes or guarantee
+that GR00T will follow a navigation instruction successfully.
 
-When Muse selects `phase=place`, base/torso commands are zeroed, arm control mode
-is selected, orientation is held, and translation is limited to 2 mm per axis
-per control step. Muse must establish position and orientation alignment before
-selecting this phase. This mode is for transfers, not pouring. It can hold the current
-pose with `set_gripper(closed=True, steps=5)` and command final vertical movement:
-
-```python
-move_vertical(distance=-0.01, steps=5)
-```
-
-Negative distance lowers; positive raises. Calls are limited to 20 mm total,
-2 mm per step, and 10 steps. Scaling comes from the validated fixed-impedance
-delta OSC controller. These are commanded deltas, not guaranteed displacement,
-collision avoidance, or contact sensing. No private object pose or contact state
-is used. Reobserve after movement; never repeatedly push against a surface.
-
-Release of a latched object must be a separate decision containing only
-`set_gripper(closed=False, steps=5)`. The runner requires a latched object,
-supported grasp, placement phase, and an explicit destination marked visible in
-that decision's memory updates. Muse must additionally establish support or a
-low, clear receptacle placement from current views. This visual judgment can be
-wrong; the gate does not certify support. Then verify stable placement and
-gripper clearance. Policy-open commands alone never release a latched object.
-Direct gripper opening during acquisition is disabled, even when Muse claims
-the gripper empty. Absence of the planned target does not establish absence of
-another held object. Let GR00T manage acquisition; direct opening is reserved
-for guarded cargo placement or unlatched fixture-handle release in access phase.
-Muse must assess any held object independently of its active subtask target.
-Invalid model decisions return their audit
-and API usage without executing motion or updating memory. The runner records
-`invalid_decision` feedback for the next budgeted Muse request and stops after
-three consecutive invalid proposals. Execution-guard rejections are still
-reported as `recovery_required`; neither path relaxes the release guard.
+Invalid model decisions return their audit and API usage without executing
+motion or updating memory. The runner records `invalid_decision` feedback for
+the next budgeted Muse request and stops after three consecutive invalid proposals.
 
 The first selected task is `ArrangeTea`: kettle and mug onto a tray, followed by
 closing cabinet doors. Its cabinet starts open. At the pinned RoboCasa revision
@@ -492,17 +461,15 @@ sudo docker compose --profile agent up -d --wait inference supervisor
 sudo docker compose --profile agent run --rm sim \
   python -m sim.compare \
     --task ArrangeTea --split pretrain --seeds 0 \
-    --conditions baseline muse --require-unseen-composite --hybrid-control \
+    --conditions baseline muse --require-unseen-composite \
     --max-decisions 190 --max-api-calls 200 \
-    --output /outputs/tea-hybrid-comparison-001
+    --output /outputs/tea-planner-comparison-001
 ```
 
 Proceed only after tests and service health pass. The supervisor must use its
 rebuilt image because the program vocabulary and placement instructions changed.
-Inspect `transport_control` events and each tool event's override counters in
-`trace.jsonl`; final counters also appear in `result.json`. A gain measures the
-combined supervisor/control intervention. Use a matching Muse-only run without
-`--hybrid-control` to separate control effects from instruction supervision.
+Inspect instructions, visual claims, and environment task success in `trace.jsonl`
+and `result.json`. GR00T action values are unmodified in every condition.
 
 ## Scene and RGB integrity
 

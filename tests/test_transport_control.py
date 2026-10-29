@@ -23,6 +23,25 @@ def tray():
 
 
 class TransportTests(unittest.TestCase):
+    def test_default_episode_tools_passes_all_gr00t_actions_unchanged(self):
+        recorded = []
+        observation = {'video.camera': np.zeros((4, 4, 3), np.uint8)}
+        def execute(action):
+            recorded.append({key: value.copy() for key, value in action.items()})
+            return observation.copy(), 0, False, False, {}
+        tools = EpisodeTools(SimpleNamespace(step=execute), observation, None,
+                             {'modalities': {'video': {'modality_keys': ['video.camera']}}},
+                             SimpleNamespace(append_data=lambda frame: None), 50, 8)
+        proposed = {key: np.full(shape, .7, np.float32) for key, shape in ACTION_SHAPES.items()}
+        proposed['action.gripper_close'][:] = 0
+        proposed['action.control_mode'][:] = 1
+        tools.step(proposed)
+        for key in proposed:
+            np.testing.assert_array_equal(recorded[0][key], proposed[key])
+        self.assertIsNone(tools.transport_control)
+        self.assertFalse(tools.allow_gripper)
+        self.assertFalse(tools.allow_vertical)
+
     def test_latch_blocks_open_and_survives_uncertainty_without_mutating_prediction(self):
         control = TransportControl()
         control.update(assessment(), [])

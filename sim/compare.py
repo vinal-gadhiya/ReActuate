@@ -54,8 +54,6 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--supervisor-stop-policy', getattr(args, 'supervisor_stop_policy', 'halt')]
         command += ['--max-supervisor-failures', str(getattr(args, 'max_supervisor_failures', 3))]
         command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
-        if getattr(args, 'hybrid_control', False):
-            command += ['--hybrid-control']
     if getattr(args, 'require_unseen_composite', False):
         command += ['--require-unseen-composite']
     if getattr(args, 'sam_video', False):
@@ -124,8 +122,7 @@ def save_report(output, rows, conditions=CONDITIONS):
         'Scene seeds do not make stochastic policy/API outputs identical. Small samples do not establish improvement.',
         'SAM supplies candidate boxes to Muse, not 3D control or a new GR00T skill.',
         'Replans may diverge. Errors are reported separately and are not counted as completed task failures.',
-        'With --hybrid-control, supervised conditions receive action arbitration and placement primitives; '
-        'baseline remains unmodified. Any gain belongs to that combined system, not Muse reasoning alone.',
+        'GR00T owns all control actions in every condition. Muse/SAM change instructions and planning, not action values.',
     ]}
     (output / 'comparison.json').write_text(json.dumps(report, indent=2) + '\n')
     lines = ['# Closed-loop comparison', '',
@@ -156,7 +153,6 @@ def main():
                         help='Simulator only: honor Muse stop, or continue short guarded policy bursts within remaining budgets')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
-    parser.add_argument('--hybrid-control', action='store_true', help='Enable transport arbitration and bounded placement tools for supervised conditions only')
     parser.add_argument('--require-unseen-composite', action='store_true')
     parser.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS),
                         help='Ordered conditions; baseline must be first, muse precedes muse_sam')
