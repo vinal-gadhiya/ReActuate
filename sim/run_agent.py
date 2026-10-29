@@ -197,8 +197,11 @@ def handoff_context(plan, index, history):
 
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
-                 placement_burst_steps=8):
+                 placement_burst_steps=8, supervisor_stop_policy='halt'):
+    if supervisor_stop_policy not in ('halt', 'continue'):
+        raise ValueError('Unknown supervisor stop policy')
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
+    last_transfer = None
     invalid_decisions = 0
     last_inspection, repeated_inspections = None, 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
@@ -247,7 +250,17 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'object_loss_reported'
         status = decision['status']
         if status == 'stop':
-            return 'supervisor_stop'
+            if supervisor_stop_policy == 'halt':
+                return 'supervisor_stop'
+            if last_transfer is None or last_transfer[0] != step['id'] or remaining <= 0:
+                return 'supervisor_stop_without_continuation'
+            instruction = last_transfer[1]
+            burst = min(16, decision_steps, remaining)
+            record({'event': 'supervisor_stop_deferred', 'subtask': step['id'], 'step': tools.steps,
+                    'reason': decision['evidence'], 'remaining_steps': remaining,
+                    'instruction': instruction, 'steps': burst,
+                    'note': 'Simulator continuation mode; control guards and execution budgets still apply.'})
+            decision = {**decision, 'program': f'run_groot(instruction={instruction!r}, steps={burst})'}
         if status == 'inspect':
             inspection = (tools.steps, tuple(sorted(decision['perception'].items())))
             repeated_inspections = repeated_inspections + 1 if inspection == last_inspection else 1
@@ -323,6 +336,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 arguments = {**arguments, 'steps': motion_left}
             before = tools.steps
             getattr(tools, name)(**arguments)
+            if name == 'run_groot' and tools.steps > before:
+                last_transfer = (step['id'], arguments['instruction'])
             if mode == 'agent':
                 diagnostics = getattr(tools, 'last_diagnostics', {})
                 instruction = arguments.get('instruction', f'Navigate to the {arguments.get("fixture", "")}.')
@@ -366,6 +381,8 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--supervisor-stop-policy', choices=('halt', 'continue'), default='halt',
+                        help='Simulator only: honor model stop, or retry the last executed policy instruction in short guarded bursts')
     parser.add_argument('--max-navigation-bursts', type=int, default=6)
     parser.add_argument('--stall-bursts', type=int, default=4, help='Stationary bursts before requiring recovery; 0 disables')
     parser.add_argument('--placement-burst-steps', type=int, default=8)
@@ -455,7 +472,7 @@ def main():
                 stream.write(json.dumps(event) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution', 'invalid_decision'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -533,6 +550,7 @@ def main():
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,
+                    'supervisor_stop_policy': args.supervisor_stop_policy,
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
                                      'navigate': memory.navigation_bursts < args.max_navigation_bursts,
@@ -609,6 +627,7 @@ def main():
                     args.subtask_budget_mode,
                     memory, args.max_navigation_bursts, args.stall_bursts,
                     args.placement_burst_steps,
+                    args.supervisor_stop_policy,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
@@ -617,6 +636,7 @@ def main():
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
                     'hybrid_control': args.hybrid_control,
+                    'supervisor_stop_policy': args.supervisor_stop_policy,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'benchmark_membership': simulator_context['task']['benchmark_membership'],
                 }

@@ -51,6 +51,7 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--plan', str(plan)]
     if condition != 'baseline':
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
+        command += ['--supervisor-stop-policy', getattr(args, 'supervisor_stop_policy', 'halt')]
         command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
         if getattr(args, 'hybrid_control', False):
             command += ['--hybrid-control']
@@ -149,6 +150,8 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=90)
     parser.add_argument('--max-api-calls', type=int, default=200)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--supervisor-stop-policy', choices=('halt', 'continue'), default='halt',
+                        help='Simulator only: honor Muse stop, or continue short guarded policy bursts within remaining budgets')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
     parser.add_argument('--hybrid-control', action='store_true', help='Enable transport arbitration and bounded placement tools for supervised conditions only')

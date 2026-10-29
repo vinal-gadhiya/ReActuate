@@ -47,6 +47,76 @@ class FakeTools:
 
 
 class AgentTests(unittest.TestCase):
+    def test_advisory_stop_retries_last_policy_not_navigation_then_observes(self):
+        tools, events, observations = FakeTools(), [], []
+        navigation = decision(program='navigate(fixture="sink", steps=4)')
+        navigation['assessment']['information_needed'] = 'Align with the visible sink fixture.'
+        replies = iter([decision(program='run_groot(instruction="Place mug on tray", steps=4)'),
+                        navigation,
+                        decision('stop', ''), decision('stop', '')])
+        # Ground the fixture for guarded navigation.
+        from core.scene_memory import SceneMemory
+        memory = SceneMemory()
+        first = decision()
+        first['memory_updates'] = [{'name': 'sink', 'kind': 'fixture', 'location': 'counter',
+                                    'status': 'visible', 'evidence': 'Sink visible.'}]
+        memory.update(first, 0, 0)
+
+        def decide(*args):
+            observations.append(tools.steps)
+            return next(replies)
+
+        reason = run_subtasks(tools, [step('mug', 'transfer mug')], 'agent', decide, events.append,
+                              subtask_budget_mode='episode', scene_memory=memory,
+                              supervisor_stop_policy='continue')
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(observations, [0, 4, 8, 24])
+        self.assertEqual(tools.instructions, ['Place mug on tray', 'Navigate to the sink.',
+                                             'Place mug on tray', 'Place mug on tray'])
+        self.assertEqual(len([e for e in events if e['event'] == 'supervisor_stop_deferred']), 2)
+
+    def test_advisory_stop_still_obeys_decision_budget(self):
+        from core.transport_control import TransportControl
+
+        tools, events = FakeTools(), []
+        tools.transport_control = TransportControl()
+        moving, stopping = decision(), decision('stop', '')
+        for reply in (moving, stopping):
+            reply['assessment'].update(phase='carry', grasp='supported', held_object='mug')
+        replies = iter([moving, stopping])
+        reason = run_subtasks(tools, [step('a', 'open cabinet')], 'agent',
+                              lambda *args: next(replies), events.append, max_decisions=2,
+                              subtask_budget_mode='episode', supervisor_stop_policy='continue')
+        self.assertEqual(reason, 'decision_budget')
+        self.assertEqual(tools.steps, 20)
+        self.assertEqual(tools.transport_control.held_object, 'mug')
+        self.assertFalse(tools.transport_control.release_ready)
+
+    def test_advisory_stop_does_not_override_reported_object_loss(self):
+        from core.transport_control import TransportControl
+
+        tools, events = FakeTools(), []
+        tools.transport_control = TransportControl()
+        moving, stopping = decision(), decision('stop', '')
+        moving['assessment'].update(phase='carry', grasp='supported', held_object='mug')
+        stopping['assessment'].update(phase='recover', grasp='lost', held_object='mug')
+        replies = iter([moving, stopping])
+        reason = run_subtasks(tools, [step('a', 'transfer mug')], 'agent',
+                              lambda *args: next(replies), events.append,
+                              subtask_budget_mode='episode', supervisor_stop_policy='continue')
+        self.assertEqual(reason, 'object_loss_reported')
+        self.assertEqual(tools.steps, 4)
+        self.assertFalse(any(e['event'] == 'supervisor_stop_deferred' for e in events))
+
+    def test_advisory_stop_cannot_replay_previous_subtask(self):
+        tools, events = FakeTools(), []
+        replies = iter([decision(), decision('complete', ''), decision('stop', '')])
+        reason = run_subtasks(tools, [step('a', 'open cabinet'), step('b', 'transfer mug')],
+                              'agent', lambda *args: next(replies), events.append,
+                              supervisor_stop_policy='continue')
+        self.assertEqual(reason, 'supervisor_stop_without_continuation')
+        self.assertEqual(tools.steps, 4)
+
     def test_reorder_preserves_useful_grasp_completed_prefix_and_all_remaining_goals(self):
         for deferred, held, destination, finish in (
             ('kettle', 'mug', 'tray', 'close cabinet'),
