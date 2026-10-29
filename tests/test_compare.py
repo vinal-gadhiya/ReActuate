@@ -63,6 +63,11 @@ class CompareTests(unittest.TestCase):
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         self.assertEqual(muse[muse.index('--max-supervisor-failures') + 1], '5')
         self.assertNotIn('--max-supervisor-failures', baseline)
+        self.assertEqual(muse[muse.index('--planning-context') + 1], 'summary')
+        self.assertNotIn('--planning-context', baseline)
+        args.planning_context = 'recent'
+        sam = run_command(args, 'muse_sam', 3, Path('/outputs/sam'))
+        self.assertEqual(sam[sam.index('--planning-context') + 1], 'recent')
 
     def test_two_condition_report_includes_paired_result(self):
         row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,

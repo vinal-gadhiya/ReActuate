@@ -51,6 +51,7 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--plan', str(plan)]
     if condition != 'baseline':
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
+        command += ['--planning-context', getattr(args, 'planning_context', 'summary')]
         command += ['--supervisor-stop-policy', getattr(args, 'supervisor_stop_policy', 'halt')]
         command += ['--max-supervisor-failures', str(getattr(args, 'max_supervisor_failures', 3))]
         command += ['--reference-scene', str(output.parent / 'baseline' / 'episode-000' / 'scene.json')]
@@ -145,6 +146,8 @@ def main():
     parser.add_argument('--seeds', nargs='+', type=int, default=[0])
     parser.add_argument('--action-steps', type=int, default=8)
     parser.add_argument('--decision-steps', type=int, default=40)
+    parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
+                        help='Persistent episode summary or recent events only; object memory is retained in both')
     parser.add_argument('--max-decisions', type=int, default=90)
     parser.add_argument('--max-api-calls', type=int, default=200)
     parser.add_argument('--max-replans', type=int, default=2)

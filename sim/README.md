@@ -19,7 +19,16 @@ or clip tracking, and request bounded fixture navigation before resuming a pendi
 transfer. Motion diagnostics compare declared robot measurements and rendered
 images; they do not query private object poses or certify task progress.
 
-GR00T owns all control actions. The CLI no longer offers `--hybrid-control` or
+`--planning-context summary` (default) also supplies a bounded episode notebook
+with the initial/current plan, accepted revisions and completion claims, executed
+attempts, object location changes, and recovery feedback. It survives the recent
+event window and resets between episodes. `episode_context.json` saves the latest
+summary; `supervisor_request` trace events save the exact context sent to Muse.
+`--planning-context recent` omits this notebook for comparison while keeping object
+memory and the existing recent-event/handoff context. No extra API calls or
+physical actions are introduced. See [the PatchWAM guide](../inference/PATCHWAM.md#in-context-planning-and-object-memory).
+
+The selected frozen policy (GR00T or PatchWAM) owns all control actions. The CLI no longer offers `--hybrid-control` or
 `--allow-gripper`: no action arbitration, forced grasp latch, manual release,
 base/orientation freeze, or Cartesian placement corrections are applied. Muse
 and SAM provide planning, visual memory, verification, and language corrections.

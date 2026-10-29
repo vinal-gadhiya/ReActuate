@@ -119,6 +119,7 @@ sudo docker compose -f compose.yaml -f compose.patchwam.yaml --profile agent \
   run --rm sim python -m sim.run_agent \
   --task ArrangeTea --mode agent --split pretrain --seed 0 --no-sam \
   --require-unseen-composite --action-steps 16 --decision-steps 64 \
+  --planning-context summary \
   --supervisor-stop-policy continue --max-supervisor-failures 3 \
   --max-decisions 190 --max-api-calls 200 --max-steps 2250 \
   --reference-scene /outputs/patchwam-tea-baseline-001/episode-000/scene.json \
@@ -131,6 +132,57 @@ All conditions use PatchWAM; the comparison's `baseline` means the selected
 policy with the original task instruction. Healthy supervision may still request
 shorter intervals or change instructions. Tool boundaries discard chunk tails;
 those effects must be measured separately from any planning benefit.
+
+## In-context planning and object memory
+
+Agent mode now defaults to `--planning-context summary`. Muse decomposes the
+original goal, updates semantic object/fixture memory, and receives an episode
+notebook on each planning/decision request. The notebook retains the original
+goal, initial and unfinished plan, accepted plan revisions, completed-subtask
+claims, actual execution counts/instructions, object location/status changes,
+and recovery feedback beyond the last eight events. Current camera views and
+robot measurements accompany this context as before; SAM adds visual grounding
+when `--sam` is selected. Context updates happen at supervisor decision boundaries,
+not at every physics step.
+
+The notebook summarizes explicit evidence and recorded events, not private
+chain-of-thought. Planned actions, executed attempts, and visual completion claims
+are distinguished. Rejected proposals do not update the plan or object claims;
+only accepted replans replace the unfinished plan. Old locations and completion
+claims remain fallible and must be checked against fresh observations. All memory
+resets for a new episode. No extra model calls, geometry controllers, gripper
+overrides, or changes to PatchWAM/GR00T inference are introduced.
+
+Inspect `episode-000/episode_context.json` for the latest notebook and
+`supervisor_request` events in `trace.jsonl` for the exact context sent to Muse.
+`scene_memory.json` retains current semantic entries and their observation times.
+The notebook is capped at 24,000 characters using compact fields and bounded
+recent records; older detail remains in the full trace. `omitted_summary_records`
+reports further records removed to meet the character cap. This adds prompt tokens
+and may increase API latency; improved execution success still needs measurement.
+
+For an ablation, pass `--planning-context recent` to omit the notebook while
+retaining the existing recent-event window, accepted handoffs, and object memory.
+`sim.compare` forwards this flag to supervised conditions only. Baseline continues
+to execute the original instruction without Muse or SAM requests.
+
+For this harness update, rebuild **sim and supervisor only** on Thor, run the CPU
+checks, and recreate the supervisor. Existing inference weights stay loaded:
+
+```bash
+sudo docker compose -f compose.yaml -f compose.patchwam.yaml --profile agent \
+  build sim supervisor
+
+sudo docker compose -f compose.yaml -f compose.patchwam.yaml --profile agent \
+  run --rm --no-deps supervisor python -m unittest discover -s tests -v
+
+sudo docker compose -f compose.yaml -f compose.patchwam.yaml --profile agent \
+  up -d --no-deps --wait supervisor
+```
+
+Then use the agent command above with a fresh output directory. The reference
+scene is optional: omit `--reference-scene` if that baseline artifact does not
+exist; it is needed for matching a prior scene, not for running the agent.
 
 ## Return to GR00T
 

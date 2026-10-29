@@ -16,6 +16,27 @@ from inference.meta_api import MetaAPI, MetaAPIError, image_part
 from inference.perception import tracking_records, video_part
 from core.observations import rgb_diagnostics
 
+IN_CONTEXT_PLANNING_PROMPT = '''When episode_context is supplied, use it as your
+episode-local planning notebook at each decision boundary. It summarizes your
+explicit earlier plans, evidence, discoveries, accepted subtask completions,
+executed instructions, and recovery feedback beyond the recent history window.
+Read it with the active step, original goal, current images, robot measurements,
+and scene_memory. A plan is an intention, a tool execution is an attempt, and a
+completion or remembered location is a fallible visual claim. Never treat a
+rejected proposal, API failure, or replan as physical progress. Replanning keeps
+the same physical scene. Recheck old locations and revise claims when fresh
+evidence contradicts them; timestamps matter. Use past corrections and execution
+counts to avoid repeating unsuccessful instructions without new evidence.
+Preserve the complete original goal and unfinished dependencies when revising
+the plan. Keep using consistent object/fixture names in memory_updates.
+Return concise evidence and updated memory in the existing response schema;
+full private reasoning is neither requested nor stored. This notebook resets
+between episodes. If absent (recent context mode), use the supplied recent
+history and scene memory. You choose language instructions, subtasks, and when
+to reassess; the selected frozen policy owns every physical action. Allow useful
+skills to run within the supplied decision_step_limit; retaining a grasp or
+seeing a destination alone is not a reason to reduce every burst to a few steps.'''
+
 MEMORY_PROMPT = '''Maintain explicit episode-local visual memory on every decide
 response. assessment reports phase (access/acquire/carry/locate_destination/place/
 recover/unknown), held_object (empty string if unknown), grasp (supported/uncertain/
@@ -414,7 +435,7 @@ class Supervisor:
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
-        prompt = '\n\n'.join([MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
+        prompt = '\n\n'.join([IN_CONTEXT_PLANNING_PROMPT, MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
                                 PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
         if context.get('control_owner') == 'patchwam':
             # Keep the established tool schema; only its selected executor changes.

@@ -14,6 +14,7 @@ from core.agent import parse_program, validate_decision, validate_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
+from core.episode_context import EpisodeContext
 from core.observations import check_rgb
 from core.transport_control import ACTION_SHAPES, TransportControl
 from sim.evaluate import make_policy_observation, validate_actions
@@ -318,6 +319,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             if completed_ids & {item['id'] for item in replacement}:
                 raise ValueError('Replan reused a completed subtask ID')
             plan = plan[:index] + replacement
+            record({'event': 'plan_replaced', 'subtask': step['id'], 'step': tools.steps,
+                    'steps': [dict(item) for item in plan], 'reason': decision['evidence']})
             replans, spent = replans + 1, 0
             continue
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
@@ -413,6 +416,8 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
+                        help='Agent context: persistent event/plan summary plus recent history, or recent history only (object memory stays enabled)')
     parser.add_argument('--max-supervisor-failures', type=int, default=3,
                         help='Consecutive transient decision failures allowed short policy continuation before stopping; 0 disables')
     parser.add_argument('--supervisor-stop-policy', choices=('halt', 'continue'), default='halt',
@@ -494,6 +499,7 @@ def main():
         started = time.monotonic()
         history = []
         memory = SceneMemory()
+        episode_context = EpisodeContext()
 
         def record(event):
             if event['event'] in ('decision', 'supervisor_failure_continuation') and event.get('program'):
@@ -502,9 +508,12 @@ def main():
                 event = {**event, 'program_path': filename}
             with (directory / 'trace.jsonl').open('a') as stream:
                 stream.write(json.dumps(event) + '\n')
+            if episode_context.observe(event):
+                (directory / 'episode_context.json').write_text(
+                    json.dumps(episode_context.context(event.get('step', event.get('step_after', 0))), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -523,6 +532,7 @@ def main():
             reference_scene = json.loads(args.reference_scene.read_text()) if args.reference_scene else None
             observation, _ = reset_scene(env, args.seed + episode, reference_scene)
             goal = str(observation['annotation.human.task_description'])
+            record({'event': 'episode_started', 'step': 0, 'goal': goal})
             camera_keys = metadata['modalities']['video']['modality_keys']
             scene = scene_fingerprint(env, observation, camera_keys)
             (directory / 'scene.json').write_text(json.dumps(scene, indent=2) + '\n')
@@ -603,6 +613,9 @@ def main():
                 })
                 if args.sam is not None:
                     context['use_sam'] = args.sam
+                context['planning_context_mode'] = args.planning_context
+                if args.planning_context == 'summary':
+                    context['episode_context'] = episode_context.context(tools.steps)
                 record({'event': 'supervisor_request', 'operation': operation, 'request': request_number,
                         'step': tools.steps, 'context': context, 'images': references})
                 request_started = time.monotonic()
@@ -679,6 +692,7 @@ def main():
                     'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,
+                    'planning_context': args.planning_context,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'benchmark_membership': simulator_context['task']['benchmark_membership'],
                 }

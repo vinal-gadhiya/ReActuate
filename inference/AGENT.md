@@ -329,6 +329,16 @@ also a valid result; boxes alone add no grasp or motion-planning skill.
 
 ## On-demand information gathering and object memory
 
+The default `--planning-context summary` adds a bounded episode-local notebook
+to every supervisor request: original goal, initial/unfinished plan, accepted
+revisions, completed-subtask claims, recorded executions, changed object locations,
+and recovery feedback. It summarizes explicit evidence and events, not private
+model reasoning, and resets for each episode. Current camera views, measurements,
+and scene memory are still supplied. Inspect `episode_context.json` and the exact
+request context in `trace.jsonl`; no extra summarization API call is made.
+Use `--planning-context recent` to omit the notebook for an ablation, retaining
+the existing recent-event window, accepted handoffs, and object memory.
+
 There is no mandatory scouting tour. Each decision supplies a structured
 assessment of transfer phase, possible held-object identity, grasp uncertainty,
 destination, missing information, and evidence. Object/fixture memory is owned
