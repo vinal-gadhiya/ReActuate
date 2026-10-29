@@ -473,6 +473,10 @@ combined supervisor/control intervention. Use a matching Muse-only run without
 ## Scene and RGB integrity
 
 The comparison runner fixes `PYTHONHASHSEED` for child processes. The simulator
+also re-executes standalone `sim.run_agent` processes with that seed if needed,
+before importing RoboCasa. Setting the variable after interpreter startup alone
+would not fix Python's hash order. This also applies to reference-scene retries.
+The simulator
 seeds Python and NumPy and selects an explicit valid layout/style pair from the
 requested split, applying the task's exclusions. It uses that singleton pair and
 preserves the requested object-instance split when constructing RoboCasa.
@@ -484,6 +488,13 @@ normally; simulator joint state is not copied over a mismatching reset.
 Every episode saves `scene.json`: layout/style, instruction, hashes of initial
 episode metadata, model XML, and rounded simulator state, plus initial RGB hashes.
 It also saves the initial metadata and numeric state for mismatch diagnosis.
+Fingerprint version 2 sorts only each object's `info.groups_containing_sampled_obj`
+membership list, whose upstream order depends on set iteration. Other lists,
+asset paths, placement metadata, XML, and physical state remain strict. Version 1
+references are accepted only when their saved metadata matches under that same
+narrow normalization and every other identity field matches; the trace records
+`scene_verified` and whether membership-order normalization was required. Raw
+metadata remains saved for inspection.
 Supervised conditions must match the baseline fingerprint before any actions or
 Meta requests. A mismatch aborts the comparison rather than silently comparing
 different scenes. The fingerprint is privileged evaluation metadata and is never

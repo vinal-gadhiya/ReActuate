@@ -17,7 +17,7 @@ from core.scene_memory import SceneMemory
 from core.observations import check_rgb
 from core.transport_control import ACTION_SHAPES, TransportControl
 from sim.evaluate import make_policy_observation, validate_actions
-from sim.scene_checks import choose_layout_style, reset_scene, scene_fingerprint, seed_process, verify_scene
+from sim.scene_checks import choose_layout_style, ensure_hash_seed, reset_scene, scene_fingerprint, seed_process, verify_scene
 
 
 def gripper_supported(env):
@@ -405,6 +405,7 @@ def main():
     if args.plan:
         starting_plan = validate_plan(json.loads(args.plan.read_text()))
 
+    ensure_hash_seed(args.seed)
     seed_process(args.seed)
     import gymnasium as gym
     import imageio.v2 as imageio
@@ -477,7 +478,7 @@ def main():
             scene = scene_fingerprint(env, observation, camera_keys)
             (directory / 'scene.json').write_text(json.dumps(scene, indent=2) + '\n')
             if reference_scene is not None:
-                verify_scene(scene, reference_scene)
+                record({'event': 'scene_verified', **verify_scene(scene, reference_scene)})
             api_calls, request_number = 0, 0
             previous_images = None
 

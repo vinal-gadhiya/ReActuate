@@ -1,11 +1,14 @@
 """Scene comparison and image integrity regressions, without hardware or live APIs."""
 
 import base64
+from copy import deepcopy
+import hashlib
 from io import BytesIO
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -13,11 +16,54 @@ from PIL import Image
 from core.observations import array_digest, check_rgb, rgb_diagnostics
 from inference.meta_api import image_part
 from inference.supervisor import Supervisor
-from sim.scene_checks import choose_layout_style, reset_scene, scene_fingerprint, seed_process, verify_scene
+from sim.scene_checks import (canonical_metadata, choose_layout_style, ensure_hash_seed, metadata_digest,
+                              reset_scene, scene_fingerprint, seed_process, verify_scene)
 from sim.run_agent import EpisodeTools
 
 
 class SceneCheckTests(unittest.TestCase):
+    def test_standalone_runner_reexecutes_with_comparison_hash_seed_and_preserves_arguments(self):
+        with patch.dict('os.environ', {'PYTHONHASHSEED': 'random'}), \
+                patch('sys.argv', ['run_agent.py', '--seed', '3', '--output', '/outputs/new run']), \
+                patch('os.execve') as execute:
+            ensure_hash_seed(3)
+        arguments = execute.call_args.args
+        self.assertEqual(arguments[1][1:], ['-m', 'sim.run_agent', '--seed', '3', '--output', '/outputs/new run'])
+        self.assertEqual(arguments[2]['PYTHONHASHSEED'], '3')
+        with patch.dict('os.environ', {'PYTHONHASHSEED': '3'}), patch('os.execve') as execute:
+            ensure_hash_seed(3)
+            execute.assert_not_called()
+
+    def test_only_membership_order_is_ignored_in_old_scene_references(self):
+        metadata = {'object_cfgs': [{'name': 'kettle', 'placement': {'pos': [0, 1]}, 'info': {
+            'cat': 'kettle', 'mjcf_path': '/assets/kettle.xml',
+            'groups_containing_sampled_obj': ['cookware', 'all', 'kettle']}}]}
+        changed = deepcopy(metadata)
+        changed['object_cfgs'][0]['info']['groups_containing_sampled_obj'].reverse()
+        self.assertEqual(canonical_metadata(metadata), canonical_metadata(changed))
+        self.assertEqual(metadata['object_cfgs'][0]['info']['groups_containing_sampled_obj'][0], 'cookware')
+        expected = {'identity': {'metadata_sha256': hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest(),
+                                 'model_xml_sha256': 'same', 'initial_state_sha256': 'same'},
+                    'initial_metadata': metadata, 'initial_state': [0., 1.]}
+        actual = {'identity': {**expected['identity'], 'metadata_sha256': metadata_digest(changed)},
+                  'initial_metadata': changed, 'initial_state': [0., 1.]}
+        self.assertTrue(verify_scene(actual, expected)['metadata_membership_order_normalized'])
+        for field in ('model_xml_sha256', 'initial_state_sha256'):
+            mismatch = {**actual, 'identity': {**actual['identity'], field: 'different'}}
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                verify_scene(mismatch, expected)
+        for key, value in (('mjcf_path', '/assets/other.xml'), ('cat', 'mug'),
+                           ('groups_containing_sampled_obj', ['all', 'mug'])):
+            other = deepcopy(changed)
+            other['object_cfgs'][0]['info'][key] = value
+            mismatch = {**actual, 'initial_metadata': other,
+                        'identity': {**actual['identity'], 'metadata_sha256': metadata_digest(other)}}
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'metadata_sha256'):
+                verify_scene(mismatch, expected)
+        other = deepcopy(changed)
+        other['object_cfgs'][0]['placement']['pos'].reverse()
+        self.assertNotEqual(metadata_digest(other), metadata_digest(metadata))
+
     def test_reset_replays_only_reference_spawn_through_normal_reset(self):
         calls = []
         metadata = {'init_robot_base_pos': [1., 2., 0.], 'init_robot_base_ori': [0., 0., 0.],
