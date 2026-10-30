@@ -369,13 +369,67 @@ class AgentTests(unittest.TestCase):
             decision('complete', ''),
             decision(program='run_groot(instruction="place mug inside", steps=3)'),
             decision('complete', ''),
+            decision('stop', ''),
         ])
         reason = run_subtasks(tools, [step('a', 'open cabinet'), step('b', 'place mug inside')],
                               'agent', lambda *args: next(replies), events.append)
         self.assertEqual(tools.instructions, ['open cabinet', 'place mug inside'])
         self.assertEqual(tools.steps, 7)
-        self.assertEqual(reason, 'plan_exhausted_without_task_success')
+        self.assertEqual(reason, 'supervisor_stop')
         self.assertFalse(tools.success)
+        self.assertEqual([event['subtask'] for event in events if event['event'] == 'subtask_transition'], ['a'])
+        self.assertEqual(len([event for event in events if event['event'] == 'final_completion_blocked']), 1)
+
+    def test_final_completion_retries_then_policy_withdrawal_reaches_simulator_success(self):
+        tools, events, observations = FakeTools(), [], []
+        original_run = tools.run_groot
+
+        def run(instruction, steps):
+            original_run(instruction, steps)
+            tools.success = True
+
+        tools.run_groot = run
+        replies = iter([decision('complete', ''),
+                        decision(program='run_groot(instruction="Move away from the pancake.", steps=4)')])
+
+        def decide(plan, index, spent, limit):
+            observations.append((index, spent, tools.steps))
+            return next(replies)
+
+        reason = run_subtasks(tools, [step('place', 'Place strawberry on pancake.')], 'agent',
+                              decide, events.append, concise_instructions=True)
+        self.assertEqual(reason, 'task_success')
+        self.assertEqual(observations, [(0, 0, 0), (0, 0, 0)])
+        self.assertEqual(tools.instructions, ['Move away from the pancake.'])
+        self.assertFalse(any(event['event'] == 'subtask_transition' for event in events))
+
+    def test_repeated_final_completion_is_bounded_without_motion_or_false_success(self):
+        tools, events = FakeTools(), []
+        reason = run_subtasks(tools, [step('last', 'Place mug on tray.')], 'agent',
+                              lambda *args: decision('complete', ''), events.append, max_decisions=3)
+        self.assertEqual(reason, 'decision_budget')
+        self.assertEqual(tools.steps, 0)
+        self.assertFalse(tools.success)
+        self.assertEqual(len([event for event in events if event['event'] == 'final_completion_blocked']), 3)
+
+    def test_final_completion_does_not_reset_exhausted_subtask_budget(self):
+        tools, events = FakeTools(), []
+        replies = iter([decision(program='run_groot(instruction="Place mug on tray.", steps=10)'),
+                        decision('complete', '')])
+        reason = run_subtasks(tools, [step('last', 'Place mug on tray.')], 'agent',
+                              lambda *args: next(replies), events.append)
+        self.assertEqual(reason, 'subtask_step_budget')
+        self.assertEqual(tools.steps, 10)
+
+    def test_simulator_success_ends_without_another_muse_request(self):
+        tools = FakeTools()
+        tools.success = True
+
+        def unexpected(*args):
+            self.fail('Muse must not be called after simulator success')
+
+        self.assertEqual(run_subtasks(tools, [step('last', 'Place mug on tray.')], 'agent',
+                                      unexpected, lambda event: None), 'task_success')
 
     def test_decision_and_replan_budgets(self):
         tools = FakeTools()

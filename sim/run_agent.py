@@ -313,6 +313,16 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 tools.refresh_observation()
             continue
         if status == 'complete':
+            if mode == 'agent' and index + 1 == len(plan) and not tools.success:
+                record({'event': 'final_completion_blocked', 'subtask': step['id'], 'step': tools.steps,
+                        'simulator_success': False,
+                        'reason': 'The simulator has not accepted task completion. Reassess placement, '
+                                  'release, gripper withdrawal, and every original goal; continue or replan. '
+                                  'A visual completion claim cannot end the episode successfully.',
+                        'completion_evidence': decision['evidence']})
+                if remaining <= 0:
+                    return 'subtask_step_budget'
+                continue
             if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
                 record({'event': 'transition_blocked', 'subtask': step['id'],
                         'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
@@ -599,6 +609,12 @@ def main():
                 motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
                 context.update({
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
+                    'simulator_success': bool(tools.success),
+                    'simulator_success_observation_step': tools.steps,
+                    'final_completion_feedback': next((
+                        {key: event[key] for key in ('step', 'subtask', 'reason')}
+                        for event in reversed(history) if event['event'] == 'final_completion_blocked'
+                    ), None),
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
                     'scene_assessment': initial_scene_assessment,

@@ -191,6 +191,10 @@ No joint-level reach/align/close-gripper/lift/retreat commands or invented tools
 
 CONTEXT_PROMPT = '''original_goal is authoritative. simulator_context describes
 tools and limits, not objects guaranteed present or trained skill competence.
+Read simulator_context.task.success_requirements before planning or acting.
+These are public rules, not live measurements of individual predicates.
+simulator_success is the authoritative overall environment result at the supplied
+observation step. A false result does not identify which requirement is unmet.
 Respect episode, decision, API, navigation and replan budgets. decision_steps
 bounds one program; max_steps covers the whole subtask and is advisory in episode
 budget mode. Zero navigation/replans does not disable other useful policy actions.
@@ -212,6 +216,15 @@ completion, handoff.readiness must be ready with evidence for the next stage.
 A successful pickup followed by placement is a normal boundary; inspect uncertain
 retention rather than opening the gripper. If there is no next stage use
 not_applicable. Accepted handoffs are dated claims; contradicting evidence matters.
+Final completion requires simulator_success=true. While it is false, keep the
+final stage active and choose useful policy execution or replan to repair unmet
+original requirements. Read final_completion_feedback when present; repeating
+complete without new motion cannot change the simulator result. For placement,
+check release, stable support, and any required gripper clearance. If the object
+is already correctly placed, request a concise high-level policy action to move
+away without picking it up again. Use the existing run_groot tool; never invent
+manual controls. The runner ends immediately on simulator success; exhausted
+budgets and genuine execution failures still end unsuccessfully.
 Before the FIRST motion, review scene_assessment and current access: if a distant
 independent target was ordered ahead of a required target already exposed and
 accessible here, correct the order before wasting a burst. Treat supplied-plan

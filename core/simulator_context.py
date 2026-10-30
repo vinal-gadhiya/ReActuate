@@ -4,7 +4,34 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-CONTEXT_VERSION = 2
+CONTEXT_VERSION = 3
+
+
+def task_success_requirements(task):
+    """Public task rules, never live predicate values or hidden object state."""
+    result = {
+        'authority': 'Only simulator_success=true establishes full-task success. Final Muse completion '
+                     'claims are rejected while it is false; continue or replan within execution budgets.',
+        'coverage': 'Task-specific requirements have not been catalogued for this task; '
+                    'do not assume another task uses the same thresholds.',
+    }
+    if task == 'GarnishPancake':
+        result.update({
+            'coverage': 'Verified public success requirements for GarnishPancake.',
+            'upstream_ref': '4f8a2980def75a55dff96b990745b83540425f09',
+            'sources': ['robocasa/environments/kitchen/composite/garnishing_dishes/garnish_pancake.py',
+                        'robocasa/utils/object_utils.py'],
+            'requirements': [
+                'The task strawberry must contact the pancake, with their horizontal centers separated '
+                'by less than 0.7 times the pancake horizontal radius.',
+                'The pancake must contact its original plate, with their horizontal centers separated '
+                'by less than 0.7 times the plate horizontal radius.',
+                'That plate must contact the designated dining counter.',
+                'The right gripper end-effector site must be more than 0.25 metres from the strawberry '
+                '(3D Euclidean distance). Release alone does not satisfy this requirement.',
+            ],
+        })
+    return result
 
 
 def load_atomic_task_catalog(registered_tasks=()):
@@ -30,7 +57,8 @@ SIMULATOR_GUIDE = {
     'observation_rules': [
         'RGB images are partial views, not a complete scene inventory.',
         'Proprioception describes the robot, not ground-truth object locations or contacts.',
-        'No object depth, object poses, contact labels, or task-success predicates are supplied to this supervisor.',
+        'No object depth, object poses, contact labels, or live individual success-predicate values are supplied. '
+        'Public success requirements and the overall simulator success flag are supplied.',
         'A task-mentioned object may be occluded or inside a container; not visible does not mean absent.',
         'A visible object may be a distractor. Match task attributes and relations before selecting it.',
         'SAM candidates are perception estimates, not proof of identity, contact, or containment.',
@@ -81,6 +109,7 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
     return {
         'version': CONTEXT_VERSION, 'guide': guide,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
+                 'success_requirements': task_success_requirements(task),
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {
             'registered_atomic_task_names': atomic_tasks,

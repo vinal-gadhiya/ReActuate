@@ -5,10 +5,20 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from core.simulator_context import build_simulator_context, load_atomic_task_catalog, load_operator_context
+from core.simulator_context import (build_simulator_context, load_atomic_task_catalog,
+                                    load_operator_context, task_success_requirements)
 
 
 class SimulatorContextTests(unittest.TestCase):
+    def test_success_rules_are_public_task_specific_and_fresh_per_request(self):
+        rules = task_success_requirements('GarnishPancake')
+        self.assertEqual(len(rules['requirements']), 4)
+        self.assertIn('0.25 metres', rules['requirements'][-1])
+        self.assertEqual(rules['upstream_ref'], '4f8a2980def75a55dff96b990745b83540425f09')
+        self.assertNotIn('requirements', task_success_requirements('OtherTask'))
+        rules['requirements'].clear()
+        self.assertEqual(len(task_success_requirements('GarnishPancake')['requirements']), 4)
+
     def test_context_separates_capabilities_from_reference_tasks(self):
         metadata = {'camera_width': 256, 'camera_height': 256, 'modalities': {
             'video': {'modality_keys': ['video.robot0_agentview_left', 'video.robot0_eye_in_hand']}}}

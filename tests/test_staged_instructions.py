@@ -46,7 +46,7 @@ class StagedInstructionTests(unittest.TestCase):
         placing['assessment'].update(phase='place', held_object='cup', grasp='supported')
         placed = decision('complete', '')
         placed['assessment'].update(phase='place', held_object='', grasp='empty')
-        replies = iter([pickup, acquired, placing, placed])
+        replies = iter([pickup, acquired, placing, placed, decision('stop', '')])
 
         def decide(*args):
             observed.append(tools.steps)
@@ -54,9 +54,10 @@ class StagedInstructionTests(unittest.TestCase):
 
         run_subtasks(tools, [step('pick', 'Pick up the cup.'), step('place', 'Place the cup on the table.')],
                      'agent', decide, events.append, concise_instructions=True)
-        self.assertEqual(observed, [0, 4, 4, 8])
+        self.assertEqual(observed, [0, 4, 4, 8, 8])
         self.assertEqual(tools.instructions, ['Pick up the cup.', 'Place the cup on the table.'])
-        self.assertEqual([e['subtask'] for e in events if e['event'] == 'subtask_transition'], ['pick', 'place'])
+        self.assertEqual([e['subtask'] for e in events if e['event'] == 'subtask_transition'], ['pick'])
+        self.assertEqual(len([e for e in events if e['event'] == 'final_completion_blocked']), 1)
 
     def test_rejected_combined_command_does_not_execute(self):
         tools, events = FakeTools(), []

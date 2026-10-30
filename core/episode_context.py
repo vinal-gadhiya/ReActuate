@@ -164,7 +164,7 @@ class EpisodeContext:
                         'source': 'Muse completion claim accepted by runner; not environment proof'}
             self.completed[accepted['id']] = accepted
             item.update(evidence=accepted['evidence'])
-        elif kind in ('invalid_decision', 'recovery_required', 'transition_blocked',
+        elif kind in ('invalid_decision', 'recovery_required', 'transition_blocked', 'final_completion_blocked',
                       'supervisor_unavailable', 'supervisor_stop_deferred', 'supervisor_failure_continuation',
                       'supervisor_stop_retry_limit'):
             self.recovery_count += 1

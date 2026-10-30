@@ -13,6 +13,17 @@ from tests.test_agent import FakeTools, decision, step
 
 
 class EpisodeContextTests(unittest.TestCase):
+    def test_rejected_final_completion_remains_pending_and_is_recorded_as_feedback(self):
+        journal = EpisodeContext()
+        plan = [step('last', 'Place strawberry on pancake.')]
+        journal.observe({'event': 'initial_plan', 'goal': 'Garnish pancake', 'steps': plan})
+        journal.observe({'event': 'final_completion_blocked', 'step': 12, 'subtask': 'last',
+                         'reason': 'The simulator has not accepted task completion.'})
+        context = journal.context(12)
+        self.assertEqual(context['completed_claims'], [])
+        self.assertEqual([item['id'] for item in context['unfinished_plan']], ['last'])
+        self.assertEqual(context['recent_events'][-1]['event'], 'final_completion_blocked')
+
     def journal(self):
         journal = EpisodeContext()
         journal.observe({'event': 'initial_plan', 'goal': 'Arrange tea',

@@ -34,7 +34,8 @@ decisions. `simulator_context.json` records the static context for each episode;
 `trace.jsonl` records the actual context and robot measurements sent per request.
 
 The model does not receive a complete simulator object inventory, hidden object
-poses, or task predicates. Objects named by the task can be hidden; objects seen
+poses, or individual live task predicate results. It receives public task success
+requirements where catalogued and the overall simulator success flag. Objects named by the task can be hidden; objects seen
 in images can be distractors. Prompts require the model to distinguish these
 sources of evidence rather than inventing locations or treating occlusion as
 absence. This reduces unsupported plans but does not guarantee feasibility.
@@ -654,7 +655,21 @@ Each episode directory contains:
 Top-level `config.json` and `summary.json` record configuration and results.
 Only the simulator's original task check can report full-task success. Finishing
 the plan or a positive Muse verdict cannot mark a failed episode successful.
-Privileged object state and task predicates are not passed to Muse or GR00T.
+In agent mode, a final `complete` proposal while simulator success is false emits
+`final_completion_blocked` and keeps the current stage active. Muse receives the
+overall `simulator_success` flag and dated `final_completion_feedback` on subsequent
+requests, including with recent-only planning context. It can continue policy
+execution or replan; no automatic withdrawal or extra settling actions are injected.
+Simulator success ends execution immediately. Existing step, decision, API, stop,
+and failure limits still bound unsuccessful runs.
+
+Public task requirements are supplied in `simulator_context.task.success_requirements`.
+Currently GarnishPancake has verified rules from the pinned RoboCasa source,
+including required contacts, centering, and gripper distance greater than 25 cm.
+Other tasks explicitly report uncatalogued requirements and use the same authoritative
+success gate. Individual predicate results and hidden object poses are not sent to Muse.
+Privileged object state and live individual predicate results are not passed to Muse.
+Success feedback and requirements are supervisor context, not additional policy inputs.
 
 API calls, decisions, replans, per-subtask steps, per-program steps, and total
 episode steps are bounded independently in `--subtask-budget-mode plan` (the
