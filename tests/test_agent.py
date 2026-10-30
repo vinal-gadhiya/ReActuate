@@ -507,11 +507,13 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(len(tasks), 65)
             self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
             self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
-            self.assertIn('Separate pickup and placement', prompt)
+            self.assertIn('Do not combine acquisition and placement in one instruction.', prompt)
             self.assertIn('Reorder independent unfinished subgoals', prompt)
             self.assertIn('replacement_steps replaces the entire UNFINISHED suffix', prompt)
             self.assertIn('If a held object contributes to ANY unfinished goal', prompt)
             self.assertIn('Do not infer that objectives commute', prompt)
+        self.assertIn('Separate pickup and placement', requests[0][1])
+        self.assertIn('exactly ONE literal tool call per decision', requests[1][1])
         self.assertEqual(context['simulator_context']['policy_reference']['instruction_catalog'], {'client_copy': True})
 
     def test_sam_override_controls_calls_and_forwards_boxes_to_muse(self):
