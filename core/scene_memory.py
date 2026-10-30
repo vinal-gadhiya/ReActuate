@@ -161,7 +161,7 @@ class SceneMemory:
                                  f'a generic {generic} may be a different location')
         # The policy, not the supervisor's inventory, resolves where to go.
         # Unknown location and absent memory are not authorization failures.
-        if self.navigation_bursts >= limit:
+        if limit is not None and self.navigation_bursts >= limit:
             raise ValueError('Navigation burst budget exhausted')
         if self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
             raise ValueError('Repeated navigation to the same fixture is stalled')

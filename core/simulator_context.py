@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-CONTEXT_VERSION = 5
+CONTEXT_VERSION = 6
 
 
 def load_atomic_task_catalog(registered_tasks=()):
@@ -89,6 +89,9 @@ SIMULATOR_GUIDE = {
         'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
         'Use observable stopping conditions: lift-and-move evidence is stronger than gripper closure alone.',
         'Subtask max_steps are ceilings in plan budget mode and advisory in episode mode; episode, decision, and API limits still apply.',
+        'Navigation has no separate burst cap by default and uses remaining execution budgets. '
+        'An explicit cap still applies; repeated stationary requests are rejected. Simple Navigate-to '
+        'language is routed through the same navigation tool and checks.',
     ],
 }
 

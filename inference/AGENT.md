@@ -444,7 +444,15 @@ If more information is needed, Muse can:
   planner is added. The current manipulation remains pending; successful
   navigation cannot satisfy its completion criteria.
 
-Navigation allows six bursts per episode by default (`--max-navigation-bursts`).
+Navigation uses the remaining episode, subtask, decision, and API budgets by
+default; it has no separate six-burst ceiling. `navigation_bursts_left: null`
+means there is no separate burst cap. An explicit `--max-navigation-bursts N`
+still imposes a cap, and zero disables navigation. Repeated stationary navigation
+is still rejected. A simple `run_groot(instruction="Navigate to the dining counter.",
+steps=32)` is normalized to `navigate(fixture="dining counter", steps=32)` before
+authorization, so it follows the same limits, accounting, and fixture checks.
+This conversion is recorded as `navigation_normalized` in the trace; raw model
+proposals are preserved. Baseline/fixed instructions are not normalized.
 The policy resolves named-fixture navigation even when Muse has never seen or
 localized that destination. Requests do not create fake visible memory entries
 or certify arrival. Trace source is `visual_memory`, `original_task_description`,

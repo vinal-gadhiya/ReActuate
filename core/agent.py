@@ -130,6 +130,21 @@ def parse_program(source, max_steps=80, allow_gripper=False, allow_vertical=Fals
     return commands
 
 
+def normalize_navigation_commands(commands):
+    """Route simple Navigate-to language through the same guarded navigation tool."""
+    result = []
+    for name, arguments in commands:
+        if name == 'run_groot' and re.match(r'^\s*navigate\b', arguments['instruction'], re.IGNORECASE):
+            match = re.fullmatch(r'\s*navigate\s+to\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 -]*?)\.?\s*',
+                                 arguments['instruction'], re.IGNORECASE)
+            if match is None:
+                raise ValueError('Use navigate(fixture=..., steps=...) or a simple Navigate to the named fixture instruction')
+            result.append(('navigate', {'fixture': match[1].strip(), 'steps': arguments['steps']}))
+        else:
+            result.append((name, dict(arguments)))
+    return result
+
+
 def validate_stage_program(commands):
     """Agent-only language contract; never rewrite policy actions or baseline text."""
     if len(commands) != 1:
@@ -138,7 +153,7 @@ def validate_stage_program(commands):
     if name == 'navigate':
         fixture = arguments['fixture'].strip()
         if '\n' in fixture or len(fixture) > 48 or len(fixture.split()) > 4:
-            raise ValueError('Use a concise observed fixture name for navigation; keep location descriptions in memory')
+            raise ValueError('Use a concise named fixture for navigation; keep location descriptions in memory')
         return
     if name != 'run_groot':
         return

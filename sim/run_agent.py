@@ -11,7 +11,7 @@ import uuid
 import numpy as np
 
 from core.agent import (parse_program, validate_decision, validate_stage_program,
-                        validate_placement_destination)
+                        validate_placement_destination, normalize_navigation_commands)
 from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
 from core.simulator_context import build_simulator_context, load_operator_context
@@ -200,7 +200,7 @@ def handoff_context(plan, index, history):
 
 
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
-                 subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
+                 subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=None, stall_bursts=4,
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
                  concise_instructions=False, max_stop_continuations=None):
     if supervisor_stop_policy not in ('halt', 'continue'):
@@ -209,6 +209,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         raise ValueError('Supervisor failure limit must be nonnegative')
     if max_stop_continuations is not None and max_stop_continuations < 0:
         raise ValueError('Stop continuation limit must be nonnegative')
+    if max_navigation_bursts is not None and max_navigation_bursts < 0:
+        raise ValueError('Navigation burst limit must be nonnegative or None')
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
     last_transfer = None
     supervisor_failures = 0
@@ -343,12 +345,22 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         try:
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
+            if mode == 'agent':
+                normalized = normalize_navigation_commands(commands)
+                if normalized != commands:
+                    record({'event': 'navigation_normalized', 'step': tools.steps, 'subtask': step['id'],
+                            'reason': 'Equivalent Navigate-to language routed through guarded navigation.',
+                            'original_program': decision['program'], 'commands': normalized})
+                commands = normalized
+            if mode == 'agent' and concise_instructions:
+                validate_stage_program(commands)
                 validate_placement_destination(commands, step['instruction'])
                 memory.authorize_placement_stage(commands)
             if transport is not None:
                 transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
-            if mode == 'agent' and memory.navigation_bursts + navigation_count > max_navigation_bursts:
+            if (mode == 'agent' and max_navigation_bursts is not None
+                    and memory.navigation_bursts + navigation_count > max_navigation_bursts):
                 raise ValueError('Navigation burst budget exhausted')
             for name, arguments in commands:
                 if transport is not None:
@@ -357,9 +369,6 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                         raise ValueError('Use at least one control step per 2 mm of vertical motion')
                 if name == 'navigate':
                     memory.authorize_navigation(arguments['fixture'], max_navigation_bursts)
-                if (mode == 'agent' and name == 'run_groot'
-                        and arguments['instruction'].strip().casefold().startswith('navigate ')):
-                    raise ValueError('Use navigate(fixture=..., steps=...) for guarded navigation')
                 if (mode == 'agent' and stall_bursts and memory.stall_streak >= stall_bursts
                         and name == 'run_groot' and arguments['instruction'] == memory.last_instruction):
                     raise ValueError('Stationary policy: choose information gathering, a distinct supported recovery, or stop')
@@ -444,7 +453,8 @@ def main():
                         help='Simulator only: honor model stop, or retry the last executed policy instruction in short guarded bursts')
     parser.add_argument('--max-stop-continuations', type=int, default=2,
                         help='Maximum consecutive deferred Muse stops before honoring its stop (default: 2)')
-    parser.add_argument('--max-navigation-bursts', type=int, default=6)
+    parser.add_argument('--max-navigation-bursts', type=int, default=None,
+                        help='Optional navigation burst cap; default uses remaining episode/decision/API budgets; 0 disables navigation')
     parser.add_argument('--stall-bursts', type=int, default=4, help='Stationary bursts before requiring recovery; 0 disables')
     parser.add_argument('--placement-burst-steps', type=int, default=8)
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode',
@@ -470,7 +480,7 @@ def main():
         parser.error('--max-supervisor-failures must be nonnegative')
     if args.max_stop_continuations < 0:
         parser.error('--max-stop-continuations must be nonnegative')
-    if args.max_navigation_bursts < 0 or args.stall_bursts < 0:
+    if (args.max_navigation_bursts is not None and args.max_navigation_bursts < 0) or args.stall_bursts < 0:
         parser.error('Navigation and stall limits must be nonnegative')
     if not 1 <= args.placement_burst_steps <= args.decision_steps:
         parser.error('Placement burst steps must be 1..decision-steps')
@@ -634,7 +644,9 @@ def main():
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
                     'clip_steps': clip_steps,
-                    'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
+                    'navigation_bursts_left': (None if args.max_navigation_bursts is None else
+                                               max(0, args.max_navigation_bursts - memory.navigation_bursts)),
+                    'navigation_budget_mode': 'episode' if args.max_navigation_bursts is None else 'burst_cap',
                     'replans_left': max(0, args.max_replans - sum(
                         item['event'] == 'decision' and item.get('status') == 'replan' for item in history)),
                     'last_motion': tools.last_diagnostics,
@@ -646,7 +658,9 @@ def main():
                     } for item in [entry for entry in history if entry['event'] == 'tool'][-5:]],
                     'remaining_execution_options': {
                         'run_groot': tools.steps < max_steps and decisions_left > 0 and calls_left > 0,
-                        'scope': 'Zero navigation/replan budgets disable only those operations, not the current policy transfer.',
+                        'scope': 'Navigation has no separate burst cap by default; null navigation_bursts_left '
+                                 'means episode, subtask, decision and API limits apply. An explicit zero cap '
+                                 'disables navigation. Neither zero navigation nor zero replans disables manipulation.',
                     },
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
@@ -657,7 +671,8 @@ def main():
                     'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
-                                     'navigate': memory.navigation_bursts < args.max_navigation_bursts,
+                                     'navigate': (args.max_navigation_bursts is None or
+                                                  memory.navigation_bursts < args.max_navigation_bursts),
                                      'inspect': True,
                                      'sam': args.sam if args.sam is not None else supervisor_metadata['sam_enabled']},
                     'execution_limits': {
