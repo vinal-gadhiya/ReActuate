@@ -119,6 +119,18 @@ commands. The runner enforces one action call per decision and a 12-word,
 96-character policy instruction limit. These language-stage skills still need
 rollout validation; the frozen policy and baseline instruction are unchanged.
 
+Whole-fixture commands remain concise (`Open the fridge.`, `Close the cabinet.`);
+agent execution rejects left/right/one-door steering variants. Opening completion
+guidance requires all relevant panels open and enough space for approach and
+withdrawal, not merely an interior glimpse. This remains a visual judgment.
+
+Navigation may target an exact fixture named by the original task even before
+it is seen, with task-description provenance rather than invented visual evidence.
+Names such as `dining counter` must stay specific during destination search.
+If Muse reports `locate_destination`, placement commands are rejected until it
+reports the destination localized; navigation or inspection must address that gap.
+No forced gripper retention, geometry planner, or additional policy is introduced.
+
 New plans include a scene inventory, apparent access, first-action rationale and
 route rationale before listing stages, using all current cameras in the same
 planning API call. This lets Muse prioritize exposed targets in the current

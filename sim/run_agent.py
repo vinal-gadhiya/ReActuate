@@ -343,6 +343,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
                 validate_placement_destination(commands, step['instruction'])
+                memory.authorize_placement_stage(commands)
             if transport is not None:
                 transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
@@ -401,6 +402,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             motion_left -= tools.steps - before
             record({'event': 'tool', 'subtask': step['id'], 'tool': name, 'arguments': arguments,
                     'step_before': before, 'step_after': tools.steps,
+                    **({'navigation_source': memory.navigation_source(arguments['fixture'])} if name == 'navigate' else {}),
                     'diagnostics': getattr(tools, 'last_diagnostics', {}),
                     **({'transport_control': transport.context()} if transport is not None else {})})
             if mode == 'agent':
@@ -555,6 +557,7 @@ def main():
             reference_scene = json.loads(args.reference_scene.read_text()) if args.reference_scene else None
             observation, _ = reset_scene(env, args.seed + episode, reference_scene)
             goal = str(observation['annotation.human.task_description'])
+            memory.original_goal = goal
             record({'event': 'episode_started', 'step': 0, 'goal': goal})
             camera_keys = metadata['modalities']['video']['modality_keys']
             scene = scene_fingerprint(env, observation, camera_keys)

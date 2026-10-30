@@ -145,6 +145,11 @@ def validate_stage_program(commands):
     instruction = arguments['instruction'].strip()
     if len(instruction) > 96 or len(instruction.split()) > 12:
         raise ValueError('Use one concise action, at most 12 words and 96 characters; keep scene descriptions in memory/evidence')
+    if re.match(r'^(?:open|close)\b', instruction, re.IGNORECASE) and (
+            re.search(r'\b(?:left|right|both|one|first|second)\b.*\bdoors?\b', instruction, re.IGNORECASE)
+            or re.search(r'\bdoors?\b.*\b(?:left|right)\b', instruction, re.IGNORECASE)):
+        raise ValueError('Use the whole-fixture instruction, such as Open the fridge or Close the cabinet. '
+                         'Keep panel selection and full access/clearance requirements in success criteria and evidence.')
     if ('\n' in instruction or ';' in instruction
             or len([part for part in re.split(r'[.!?]', instruction) if part.strip()]) > 1 or re.search(
             r'(?:\b(?:and|then)\b|,)\s+(?:(?:then|gently|carefully)\s+)*(?:pick|place|put|navigate|open|close|pour|turn|wash|move|bring|carry|return|switch|stir|clean)\b',

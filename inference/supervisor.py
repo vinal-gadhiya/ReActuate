@@ -47,6 +47,12 @@ Occluded contact is uncertain. Placement requires the object resting on/in its
 support and the gripper released/clear. For fixture operations, check the SAME
 relevant component: partly closed, reopened, or a different closed panel is not
 completion. Derive other checks from the original task's visible state change.
+For opening/access, visibility alone is insufficient: check space for BOTH approach
+and withdrawal with the object. Keep the full fixture-opening goal active until
+all panels needed for unobstructed access are fully open. For a double-door
+opening goal, check both doors; one open door or a glimpse of contents is not
+full completion. If one panel still blocks extraction, continue "Open the fridge."
+or the corresponding whole-fixture command, not a left/right panel instruction.
 Use execution_feedback to notice repeated unchanged phase/grasp reports, but
 verify images: unchanged phase may include productive approach and changed phase
 is still only a model claim. Do not interrupt productive execution for variety.
@@ -55,6 +61,10 @@ Preserve entity continuity using identity_anchor, observations, and previous
 location claims. These may be wrong; resolve contradictory appearance rather
 than silently substitute a distractor. Camera-left changes with viewpoint.
 Missing SAM matches do not imply absence. Pads/handles are not held objects.
+If the target disappears, do not relabel a similar-looking item on another shelf
+as the target. Preserve the last target observation and compare shape, appearance,
+source shelf and temporal motion across cameras. Treat unresolved identity as
+uncertain; do not keep reporting a target as visible from a generic colored dot.
 If a later action contradicts a completed goal, report it and insert a new repair
 subtask ID when replanning. Recheck the whole goal before final completion.
 Use feedback intervals around acquisition, release, and fixture state changes;
@@ -79,9 +89,12 @@ at an unchanged pose when they are not resolving the uncertainty. SAM regions an
 clip-local track IDs are fallible candidates, not contact or stable world IDs.
 
 navigate(fixture="counter", steps=32) asks the selected policy to navigate to an
-observed/remembered fixture. It requires a matching fixture memory entry with
-historical visible evidence and assessment.information_needed explaining the
-access/view needed. Counters, tables, cabinets, sinks and other grounded fixtures
+observed/remembered fixture OR an exact fixture name in original_goal. A task-named
+destination may be approached before it is visible; that is task-description
+evidence, not an observed location or proof of arrival. assessment.information_needed
+must explain the access/view needed. Preserve the full task fixture name, such as
+dining counter: do not replace it with a generic counter near another appliance.
+Counters, tables, cabinets, sinks and other grounded fixtures
 are permitted; arrival is unverified until observed. Use navigate rather than
 run_groot for navigation. Do not navigate to an arbitrary object, pixel, or
 coordinate. Do not repeatedly return to a generic fixture when the needed target
@@ -125,6 +138,18 @@ exposed and reachable, begin pickup. Uncertain access calls for checking evidenc
 not an automatic opening command. Close only the required relevant component
 when it is observed open; if already correctly closed, verify without motion.
 Never open something merely because a planned opening step has zero steps used.
+Opening success criteria must cover the complete relevant fixture state and
+unobstructed approach/withdrawal, not just visibility of contents. Keep panel
+checks in criteria/evidence and use "Open the fridge." or "Open the cabinet."
+as the command. Do not generate left/right door commands to obtain partial access.
+
+Resolve the destination route BEFORE committing to a long pickup. If the actual
+destination is not local, include a separate navigation stage to the exact named
+destination fixture between acquisition and placement. An unseen destination
+explicitly named in original_goal is a valid navigation goal with unverified
+arrival; do not invent its coordinates or substitute another visible worktop.
+Do not use placement commands to search for an unseen target. Stay in
+locate_destination until the intended destination is actually localized.
 
 Each step needs an ID, simple target, visible success criterion, and max_steps
 (1–1000) across the ENTIRE subtask, not per burst or seconds. Use the provided
@@ -140,6 +165,7 @@ INSTRUCTION_PROMPT = '''Use one concise action per policy call. Examples:
 "Close the cabinet."
 "Pour the milk into the bowl."
 Navigation uses navigate(fixture="cabinet", steps=32).
+For fixture opening/closing use the fixture name, not left/right/one-door variants.
 
 Do not combine acquisition and placement in one instruction. Do not append
 source chains such as 'from the shelf above ...' or destination chains such as

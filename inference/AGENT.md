@@ -425,14 +425,18 @@ If more information is needed, Muse can:
   acquisition to the destination when appropriate, rather than fixating on the
   original subtask target. Cameras can be queried across successive decisions.
 - Use `navigate(fixture="sink", steps=30)` to request a bounded GR00T navigation
-  burst. The target must match a fixture memory entry backed by evidence, name
-  a supported fixture, and have an explicit information need. No geometric
+  burst. The target must have visual memory evidence OR be an exact fixture name
+  in the original task, name a supported fixture, and have an explicit information need. No geometric
   planner is added. The current manipulation remains pending; successful
   navigation cannot satisfy its completion criteria.
 
 Navigation allows six bursts per episode by default (`--max-navigation-bursts`).
-It targets observed/remembered fixtures rather than arbitrary coordinates or
-unseen objects. Muse must assess motion, target reacquisition, and retention of
+It targets observed/remembered or task-named fixtures rather than arbitrary
+coordinates or unseen objects. An unseen task-named fixture remains unverified;
+navigation trace events record `original_task_description` rather than
+`visual_memory` as their source. During destination search, common named counter/
+table roles from the task cannot be reduced to generic `counter`/`table` targets.
+Muse must assess motion, target reacquisition, and retention of
 any possibly held object after each burst. Destination search should not cause
 a second source pick or substitute a distractor for the original object.
 

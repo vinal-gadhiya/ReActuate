@@ -98,6 +98,66 @@ class StagedInstructionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             memory.authorize_navigation('cup', 6)
 
+    def test_panel_specific_commands_are_rejected_but_whole_fixture_actions_remain_valid(self):
+        for instruction in ('Open the left fridge door.', 'Open the right door of the cabinet.',
+                            'Close the fridge door on the left.', 'Open both fridge doors.'):
+            with self.subTest(instruction=instruction), self.assertRaisesRegex(ValueError, 'whole-fixture'):
+                validate_stage_program([('run_groot', {'instruction': instruction})])
+        for instruction in ('Open the fridge.', 'Close the cabinet.', 'Open the left drawer.'):
+            validate_stage_program([('run_groot', {'instruction': instruction})])
+
+    def test_task_named_destination_can_be_approached_without_inventing_visual_memory(self):
+        memory = SceneMemory('Take the fruit from the fridge and place it on the pastry on the dining counter.')
+        proposal = decision()
+        proposal['assessment'].update(phase='locate_destination', held_object='fruit', grasp='supported',
+                                      information_needed='Locate pastry at the task-named destination.')
+        proposal['memory_updates'] = [{'name': 'dining counter', 'kind': 'fixture', 'location': 'not yet localized',
+                                       'status': 'uncertain', 'evidence': 'Named by original task, not visible.'}]
+        memory.update(proposal, 0, 1)
+        memory.authorize_navigation('dining counter', 6)
+        self.assertEqual(memory.navigation_source('dining counter'), 'original_task_description')
+        self.assertIsNone(memory.context()['entries'][0]['last_seen_step'])
+        self.assertEqual(memory.context()['entries'][0]['status'], 'uncertain')
+        with self.assertRaisesRegex(ValueError, 'task-specific destination'):
+            memory.authorize_navigation('counter', 6)
+        with self.assertRaises(ValueError):
+            memory.authorize_navigation('breakfast table', 6)
+        with self.assertRaises(ValueError):
+            memory.authorize_navigation('pastry', 6)
+        with self.assertRaises(ValueError):
+            memory.authorize_navigation('dining counter', 0)
+
+    def test_unlocalized_destination_requires_navigation_before_placement(self):
+        memory = SceneMemory('Place fruit on pastry at the dining counter.')
+        proposal = decision()
+        proposal['assessment'].update(phase='locate_destination', held_object='fruit', grasp='supported',
+                                      information_needed='Need destination view.')
+        memory.update(proposal, 0, 1)
+        with self.assertRaisesRegex(ValueError, 'Destination is still unlocalized'):
+            memory.authorize_placement_stage([('run_groot', {'instruction': 'Place the fruit on the pastry.'})])
+        memory.authorize_placement_stage([('navigate', {'fixture': 'dining counter'})])
+        memory.authorize_placement_stage([('run_groot', {'instruction': 'Pick up the fruit.'})])
+        proposal['assessment'].update(phase='place', information_needed='')
+        memory.update(proposal, 16, 2)
+        memory.authorize_placement_stage([('run_groot', {'instruction': 'Place the fruit on the pastry.'})])
+
+    def test_runner_keeps_specific_destination_navigation_as_a_separate_stage(self):
+        memory, tools, events = SceneMemory('Place fruit on pastry at the dining counter.'), FakeTools(), []
+        misplaced = decision(program='run_groot(instruction="Place the fruit on the pastry.", steps=4)')
+        misplaced['assessment'].update(phase='locate_destination', held_object='fruit', grasp='supported',
+                                       information_needed='Find pastry at dining counter.')
+        navigation = decision(program='navigate(fixture="dining counter", steps=4)')
+        navigation['assessment'] = dict(misplaced['assessment'])
+        placed = decision(program='run_groot(instruction="Place the fruit on the pastry.", steps=4)')
+        placed['assessment'].update(phase='place', held_object='fruit', grasp='supported')
+        replies = iter([misplaced, navigation, placed, decision('stop', '')])
+        run_subtasks(tools, [step('place', 'Place the fruit on the pastry.')], 'agent',
+                     lambda *args: next(replies), events.append, scene_memory=memory,
+                     concise_instructions=True)
+        self.assertEqual(tools.instructions, ['Navigate to the dining counter.', 'Place the fruit on the pastry.'])
+        navigated = next(e for e in events if e['event'] == 'tool' and e['tool'] == 'navigate')
+        self.assertEqual(navigated['navigation_source'], 'original_task_description')
+
     def test_baseline_keeps_original_multi_action_instruction(self):
         tools = FakeTools()
         original = 'Pick up the cup and place it on the table.'
