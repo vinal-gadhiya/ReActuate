@@ -192,6 +192,13 @@ No joint-level reach/align/close-gripper/lift/retreat commands or invented tools
 CONTEXT_PROMPT = '''original_goal is authoritative. simulator_context describes
 tools and limits, not objects guaranteed present or trained skill competence.
 Read simulator_context.task.success_requirements before planning or acting.
+For composite tasks, simulator_context.task.composite_reference supplies the
+current task's official description and skills_required labels. Use them with
+the atomic instruction catalog to check action coverage before the initial plan
+and on replans. These unordered documentation hints are not a fixed recipe or
+proof of policy competence. original_goal and actual scene evidence determine
+objects, destinations, access, travel, and order. Missing labels do not forbid
+needed actions; present labels do not require unnecessary actions.
 These are public rules, not live measurements of individual predicates.
 simulator_success is the authoritative overall environment result at the supplied
 observation step. A false result does not identify which requirement is unmet.

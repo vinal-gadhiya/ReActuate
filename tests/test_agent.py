@@ -549,6 +549,8 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(calls[0][0], 'test-model')
 
     def test_catalog_is_sent_to_planning_and_execution_without_mutating_client_context(self):
+        from core.simulator_context import composite_task_reference
+
         requests = []
 
         class FakeAPI:
@@ -559,7 +561,8 @@ class AgentTests(unittest.TestCase):
 
         supervisor = Supervisor(FakeAPI(), 'test-model')
         context = {'api_calls_left': 2, 'simulator_context': {'policy_reference': {
-            'instruction_catalog': {'client_copy': True}, 'registered_atomic_task_names': ['OpenFridge']}},
+            'instruction_catalog': {'client_copy': True}, 'registered_atomic_task_names': ['OpenFridge']},
+            'task': {'composite_reference': composite_task_reference('GarnishPancake')}},
             'step': step('a', 'open fridge'), 'decision_step_limit': 40,
             'capabilities': {'set_gripper': False}}
         images = {'current:camera': np.zeros((4, 6, 3), dtype=np.uint8)}
@@ -570,6 +573,10 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(len(tasks), 65)
             self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
             self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
+            composite = payload['context']['simulator_context']['task']['composite_reference']
+            self.assertEqual(composite['name'], 'GarnishPancake')
+            self.assertEqual(composite['skills_required'], ['Navigation', 'Open Door', 'Pick & Place'])
+            self.assertIn('skills_required', prompt)
             self.assertIn('Do not combine acquisition and placement in one instruction.', prompt)
             self.assertIn('Reorder independent unfinished subgoals', prompt)
             self.assertIn('replacement_steps replaces the entire UNFINISHED suffix', prompt)
@@ -578,6 +585,8 @@ class AgentTests(unittest.TestCase):
         self.assertIn('Separate pickup and placement', requests[0][1])
         self.assertIn('exactly ONE literal tool call per decision', requests[1][1])
         self.assertEqual(context['simulator_context']['policy_reference']['instruction_catalog'], {'client_copy': True})
+        self.assertEqual(context['simulator_context']['task']['composite_reference']['skills_required'],
+                         ['Navigation', 'Open Door', 'Pick & Place'])
 
     def test_sam_override_controls_calls_and_forwards_boxes_to_muse(self):
         calls = []

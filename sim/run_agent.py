@@ -698,6 +698,7 @@ def main():
                 simulator_context = build_simulator_context(
                     args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
                     ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
+                    composite_tasks=COMPOSITE_TASK_DATASETS.keys(),
                 )
                 simulator_context['tools']['move_vertical'] = {
                     'available': tools.allow_vertical,

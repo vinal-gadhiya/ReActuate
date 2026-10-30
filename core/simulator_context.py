@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-CONTEXT_VERSION = 3
+CONTEXT_VERSION = 4
 
 
 def task_success_requirements(task):
@@ -45,6 +45,48 @@ def load_atomic_task_catalog(registered_tasks=()):
     if missing:
         raise ValueError(f'Atomic instruction catalog does not cover registered tasks: {missing}')
     return catalog
+
+
+def load_composite_task_catalog(registered_tasks=()):
+    """Pinned descriptions and the official Skills Involved display labels."""
+    catalog = json.loads(Path(__file__).with_name('composite_task_catalog.json').read_text())
+    names = set()
+    for task in catalog['tasks']:
+        name = task['name']
+        if not isinstance(name, str) or not name.strip() or name in names:
+            raise ValueError('Composite task catalog contains duplicate or empty names')
+        names.add(name)
+        if not isinstance(task['description'], str) or not task['description'].strip():
+            raise ValueError(f'Composite task {name} has no description')
+        for field in ('skills_required', 'skill_keys'):
+            skills = task[field]
+            if (not isinstance(skills, list)
+                    or any(not isinstance(skill, str) or not skill.strip() for skill in skills)
+                    or len(skills) != len(set(skills))):
+                raise ValueError(f'Composite task {name} has invalid {field}')
+        if len(task['skills_required']) != len(task['skill_keys']):
+            raise ValueError(f'Composite task {name} has mismatched skill labels and keys')
+    missing = sorted(set(registered_tasks) - names)
+    if missing:
+        raise ValueError(f'Composite task catalog does not cover registered tasks: {missing}')
+    return catalog
+
+
+def composite_task_reference(task, registered_tasks=()):
+    catalog = load_composite_task_catalog(registered_tasks)
+    entry = next((entry for entry in catalog['tasks'] if entry['name'] == task), None)
+    if entry is None:
+        raise ValueError(f'Composite task catalog does not cover current task: {task}')
+    return {
+        **deepcopy(entry),
+        **{key: catalog[key] for key in ('upstream_ref', 'description_source', 'skills_source',
+                                         'navigation_source', 'description_kind', 'skills_kind')},
+        'usage': 'Use these unordered skill hints with the atomic instruction catalog to check action '
+                 'coverage before planning and when replanning. Ground actions and order in the current '
+                 'scene and original_goal. A label does not require an unnecessary action; absence of a '
+                 'label does not forbid a needed action. These are not tools, a fixed recipe, success '
+                 'predicates, or proof of policy competence.',
+    }
 
 
 SIMULATOR_GUIDE = {
@@ -98,7 +140,8 @@ def load_operator_context(path):
     return value
 
 
-def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gripper, operator_context):
+def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gripper, operator_context,
+                            composite_tasks=()):
     atomic_tasks = sorted(atomic_tasks)
     catalog = load_atomic_task_catalog(atomic_tasks)
     guide = SIMULATOR_GUIDE
@@ -109,6 +152,7 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
     return {
         'version': CONTEXT_VERSION, 'guide': guide,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
+                 'composite_reference': composite_task_reference(task, composite_tasks) if is_composite else None,
                  'success_requirements': task_success_requirements(task),
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {

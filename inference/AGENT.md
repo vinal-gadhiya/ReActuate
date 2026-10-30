@@ -33,6 +33,20 @@ The initial planning request receives the same capability context as later
 decisions. `simulator_context.json` records the static context for each episode;
 `trace.jsonl` records the actual context and robot measurements sent per request.
 
+`core/composite_task_catalog.json` contains the names, documentation descriptions,
+and `skills_required` labels for all 300 composite tasks at the pinned RoboCasa
+revision, with source links, hashes, and license. Skills reproduce the official
+Skills Involved display: defaults, manual overrides, Navigation metadata,
+name/description inference, and per-task removals. Dataset membership badges are
+excluded. The simulator checks coverage against its registered composite tasks.
+Muse receives only the current task's entry in
+`simulator_context.task.composite_reference` before the first plan and in later
+decisions, alongside the existing atomic instruction catalog. No extra API call
+or runtime documentation fetch is needed. Labels guide action coverage; they do
+not impose an order, prove policy competence, or override scene-dependent access
+and navigation. The episode's `original_goal` remains authoritative when its
+wording differs from the documentation template.
+
 The model does not receive a complete simulator object inventory, hidden object
 poses, or individual live task predicate results. It receives public task success
 requirements where catalogued and the overall simulator success flag. Objects named by the task can be hidden; objects seen
