@@ -33,6 +33,12 @@ The selected frozen policy (GR00T or PatchWAM) owns all control actions. The CLI
 base/orientation freeze, or Cartesian placement corrections are applied. Muse
 and SAM provide planning, visual memory, verification, and language corrections.
 Destination visibility does not automatically shorten a policy execution burst.
+Agent policy instructions now use separate concise actions, with exactly one
+tool call per decision and observation before the next stage. Pickup and
+placement are separate language goals; access/opening is conditional on an
+observed obstruction or explicit requirement. The runner rejects multi-action
+commands or instructions over 12 words/96 characters without executing them.
+Detailed scene grounding stays in supervisor context. Baseline text is unchanged.
 
 `run_agent.py` and `compare.py` accept `--supervisor-stop-policy continue` for
 simulation comparisons that should keep trying within the episode budget. A Muse
@@ -43,7 +49,10 @@ program validation and decision/API budgets. Navigation
 and instructions from prior subtasks are never replayed by this
 fallback. The trace records `supervisor_stop_deferred`; results record the chosen
 policy. This does not guarantee use of the full horizon or task success. The
-default `halt` policy still ends immediately on a model stop request.
+default `halt` policy still ends immediately on a model stop request. Agent CLI
+continuation is bounded by `--max-stop-continuations` (default 2 consecutive
+deferred stops), then returns `supervisor_stop_retry_limit`. Ordinary non-stop
+decisions reset the count; API failure continuation has its separate limit.
 
 Transient Muse decision failures (connection errors, timeouts, rate limits, and
 selected upstream server errors) also allow short guarded continuation of the

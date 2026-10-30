@@ -111,6 +111,19 @@ be accounted for when interpreting differences from the release's evaluator.
 
 ## Muse and optional SAM
 
+Agent instructions now use separate concise stages such as `Pick up the cup.`
+and `Place the cup on the tray.`, with observation between them. Opening/access
+is conditional on the actual obstruction or explicit task requirement. Detailed
+scene descriptions stay in Muse's memory rather than being appended to policy
+commands. The runner enforces one action call per decision and a 12-word,
+96-character policy instruction limit. These language-stage skills still need
+rollout validation; the frozen policy and baseline instruction are unchanged.
+
+With `--supervisor-stop-policy continue`, `--max-stop-continuations 2` (default)
+allows two consecutive deferred stops, then ends with `supervisor_stop_retry_limit`.
+This bounds the repeated stop/16-step-retry loop; set it to 0 to honor the first
+stop. An ordinary non-stop decision resets this consecutive-stop count.
+
 This verifies the same starting scene against the baseline above, without
 executing the baseline again. Use `--sam` in place of `--no-sam` to add grounding.
 

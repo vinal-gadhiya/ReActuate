@@ -68,20 +68,28 @@ simulator also verifies that its registered atomic tasks have catalog entries,
 and saves the catalog reference in `simulator_context.json`. The supervisor
 metadata records the catalog revision, task count, and grounding strategy.
 
-Muse is instructed to preserve the catalog's task-level verbs and sentence
-patterns while binding objects, sources, destinations, and placeholders to the
-actual goal and observations. Complete object transfers remain one policy goal;
-the supervisor should keep that instruction stable across bursts, rather than
-generate separate wrist alignment, reaching, closing, and retreat instructions.
-Detailed progress checks and handoff conditions remain in verification fields.
+Muse now uses concise single-action stages across all agent tasks. The catalog
+provides reference vocabulary rather than requiring full-transfer sentences.
+For example: `Pick up the cup.` followed, after confirmed acquisition, by
+`Place the cup on the tray.` Navigation, opening, closing, pouring, washing and
+other task-relevant actions are separate stages when needed. Keep an instruction
+stable while that stage makes progress; do not alternate unrelated goals or
+paraphrase merely to justify another retry. Detailed appearance, locations and
+verification criteria stay in scene memory, evidence and success criteria.
 
-For example, the ice-to-coffee template can ground an ice-to-lemonade instruction
-without changing the goal to coffee. A lemon transfer from fridge to glass uses
-the same pick-and-place sentence structure, with its actual source/destination;
-it is an adaptation, not an existing atomic task or an established policy skill.
-If no supported recovery pattern fits, Muse must state the limitation instead of
-inventing a low-level motion tool. This is prompt grounding, not a guarantee that
-the model follows every instruction or the frozen policy can execute it.
+The agent runner enforces one tool call per decision, at most 12 words and 96
+characters for a policy instruction, and rejects combined pickup/place commands
+without executing them. It does not automatically rewrite model text. These are
+policy language requests, not manual pickup primitives or proof of checkpoint
+competence. GR00T and PatchWAM inference code and original-instruction baseline
+execution are unchanged.
+
+Access is conditional: an object on an exposed shelf does not require opening a
+cabinet. Muse should insert access work only for an observed obstruction or an
+explicit task requirement. Zero executed steps in a planned opening stage is not
+evidence that opening is necessary. Observe the relevant component before accepting
+closure. A supplied combined-transfer plan can still be executed using separate
+pickup and placement calls within its active goal, without replanning each stage.
 
 These public templates match the documentation table. They are not a fetched
 copy of every language annotation in the checkpoint's training datasets. Exact
@@ -356,11 +364,13 @@ entries are retained, and internal history remains available for later requests.
 Supervision checks the visible outcome relevant to each goal: acquisition during
 withdrawal, support and release for placement, actual arrival for navigation,
 the same articulated component for fixture operations, or the state change in
-another task's success criteria. Muse should put grounded instance attributes
-and source/destination relations into corrective policy instructions: policy
-inference does not receive Muse's notebook or SAM boxes. Supported navigation,
-access, transfer, and verification goals can be sequenced without inventing
-position commands or assuming standalone pickup skills. A contradicted completed
+another task's success criteria. Policy instructions use the shortest unambiguous
+object name, at most one essential modifier; detailed instance attributes and
+source/destination relations stay in Muse's context. Policy inference does not
+receive Muse's notebook or SAM boxes. Navigation, access, pickup, placement and
+verification stages use policy language requests with observed outcome checks,
+without inventing position commands or assuming standalone skills are reliable.
+A contradicted completed
 goal requires a new repair goal; the historical completion claim remains in the
 trace. Guidance and retained evidence do not guarantee correct visual judgments.
 
@@ -556,7 +566,8 @@ point or repair an underlying driver/rendering failure.
 
 Fixture memory keeps the last observed location and evidence even when current
 visibility becomes uncertain, so the robot can revisit a previously seen sink.
-This does not add navigation support for dining counters or arbitrary coordinates.
+Observed counter/table fixtures can be navigation language targets; this does not
+establish policy reliability for them or add arbitrary-coordinate navigation.
 While a grasp is supported and the destination is visible (or placement phase
 is selected), motion bursts are capped at eight control steps by default
 (`--placement-burst-steps`). Truncation is logged as `bounded_execution` and no

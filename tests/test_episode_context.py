@@ -170,7 +170,7 @@ class EpisodeContextTests(unittest.TestCase):
         }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0][0]['context']['episode_context']['original_goal'], 'Arrange tea')
-        self.assertIn('planning notebook', requests[0][1])
+        self.assertIn('episode-local notebook', requests[0][1])
         self.assertIn('selected PatchWAM policy', requests[0][1])
 
 

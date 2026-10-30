@@ -157,7 +157,8 @@ class EpisodeContext:
             self.completed[accepted['id']] = accepted
             item.update(evidence=accepted['evidence'])
         elif kind in ('invalid_decision', 'recovery_required', 'transition_blocked',
-                      'supervisor_unavailable', 'supervisor_stop_deferred', 'supervisor_failure_continuation'):
+                      'supervisor_unavailable', 'supervisor_stop_deferred', 'supervisor_failure_continuation',
+                      'supervisor_stop_retry_limit'):
             self.recovery_count += 1
             item['reason'] = short(event.get('reason', event.get('error', event.get('evidence', ''))))
             self.recoveries.append(dict(item))

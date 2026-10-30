@@ -2,6 +2,7 @@
 
 import ast
 import math
+import re
 from core.scene_memory import ASSESSMENT_SCHEMA, MEMORY_ENTRY_SCHEMA, PERCEPTION_SCHEMA, validate_scene_fields
 
 STEP_PROPERTIES = {
@@ -127,6 +128,28 @@ def parse_program(source, max_steps=80, allow_gripper=False, allow_vertical=Fals
             name == 'set_gripper' and not arguments['closed'] for name, arguments in commands):
         raise ValueError('Observe after vertical motion before requesting release in a separate decision')
     return commands
+
+
+def validate_stage_program(commands):
+    """Agent-only language contract; never rewrite policy actions or baseline text."""
+    if len(commands) != 1:
+        raise ValueError('Execute one simple stage per decision, then observe before the next stage')
+    name, arguments = commands[0]
+    if name == 'navigate':
+        fixture = arguments['fixture'].strip()
+        if '\n' in fixture or len(fixture) > 48 or len(fixture.split()) > 4:
+            raise ValueError('Use a concise observed fixture name for navigation; keep location descriptions in memory')
+        return
+    if name != 'run_groot':
+        return
+    instruction = arguments['instruction'].strip()
+    if len(instruction) > 96 or len(instruction.split()) > 12:
+        raise ValueError('Use one concise action, at most 12 words and 96 characters; keep scene descriptions in memory/evidence')
+    if ('\n' in instruction or ';' in instruction
+            or len([part for part in re.split(r'[.!?]', instruction) if part.strip()]) > 1 or re.search(
+            r'(?:\b(?:and|then)\b|,)\s+(?:(?:then|gently|carefully)\s+)*(?:pick|place|put|navigate|open|close|pour|turn|wash|move|bring|carry|return|switch|stir|clean)\b',
+            instruction, re.IGNORECASE)):
+        raise ValueError('Separate pickup, placement, navigation and other actions into distinct stages with observations between them')
 
 
 def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertical=False):

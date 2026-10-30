@@ -507,7 +507,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(len(tasks), 65)
             self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
             self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
-            self.assertIn('Do not decompose these into separate reach', prompt)
+            self.assertIn('Separate pickup and placement', prompt)
             self.assertIn('Reorder independent unfinished subgoals', prompt)
             self.assertIn('replacement_steps replaces the entire UNFINISHED suffix', prompt)
             self.assertIn('If a held object contributes to ANY unfinished goal', prompt)

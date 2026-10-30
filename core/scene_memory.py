@@ -138,7 +138,7 @@ class SceneMemory:
 
     def authorize_navigation(self, fixture, limit):
         if not re.search(r'\b(sink|fridge|refrigerator|oven|microwave|dishwasher|coffee machine|cabinet|'
-                         r'stove|hood|toaster|electric kettle|stand mixer)\b', fixture.casefold()):
+                         r'stove|hood|toaster|electric kettle|stand mixer|counter|table)\b', fixture.casefold()):
             raise ValueError('Navigation target must name a catalog-supported fixture, not a position or object')
         record = self.entries.get(('fixture', fixture.casefold().strip()))
         if record is None or record.get('last_seen_step') is None:

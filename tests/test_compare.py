@@ -68,6 +68,11 @@ class CompareTests(unittest.TestCase):
         args.planning_context = 'recent'
         sam = run_command(args, 'muse_sam', 3, Path('/outputs/sam'))
         self.assertEqual(sam[sam.index('--planning-context') + 1], 'recent')
+        self.assertEqual(sam[sam.index('--max-stop-continuations') + 1], '2')
+        self.assertNotIn('--max-stop-continuations', baseline)
+        args.max_stop_continuations = 0
+        muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
+        self.assertEqual(muse[muse.index('--max-stop-continuations') + 1], '0')
 
     def test_two_condition_report_includes_paired_result(self):
         row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,

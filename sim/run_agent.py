@@ -10,7 +10,7 @@ import uuid
 
 import numpy as np
 
-from core.agent import parse_program, validate_decision, validate_plan
+from core.agent import parse_program, validate_decision, validate_plan, validate_stage_program
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
@@ -198,16 +198,20 @@ def handoff_context(plan, index, history):
 
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
-                 placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3):
+                 placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
+                 concise_instructions=False, max_stop_continuations=None):
     if supervisor_stop_policy not in ('halt', 'continue'):
         raise ValueError('Unknown supervisor stop policy')
     if max_supervisor_failures < 0:
         raise ValueError('Supervisor failure limit must be nonnegative')
+    if max_stop_continuations is not None and max_stop_continuations < 0:
+        raise ValueError('Stop continuation limit must be nonnegative')
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
     last_transfer = None
     supervisor_failures = 0
     invalid_decisions = 0
     last_inspection, repeated_inspections = None, 0
+    consecutive_stop_continuations = 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
     while not tools.done and index < len(plan):
         supervisor_unavailable = False
@@ -282,6 +286,12 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'supervisor_stop'
             if last_transfer is None or last_transfer[0] != step['id'] or remaining <= 0:
                 return 'supervisor_stop_without_continuation'
+            if max_stop_continuations is not None and consecutive_stop_continuations >= max_stop_continuations:
+                record({'event': 'supervisor_stop_retry_limit', 'subtask': step['id'], 'step': tools.steps,
+                        'reason': 'Repeated stop decisions exhausted the bounded continuation allowance.',
+                        'limit': max_stop_continuations})
+                return 'supervisor_stop_retry_limit'
+            consecutive_stop_continuations += 1
             instruction = last_transfer[1]
             burst = min(16, decision_steps, remaining)
             record({'event': 'supervisor_stop_deferred', 'subtask': step['id'], 'step': tools.steps,
@@ -289,6 +299,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     'instruction': instruction, 'steps': burst,
                     'note': 'Simulator continuation mode; control guards and execution budgets still apply.'})
             decision = {**decision, 'program': f'run_groot(instruction={instruction!r}, steps={burst})'}
+        else:
+            consecutive_stop_continuations = 0
         if status == 'inspect':
             inspection = (tools.steps, tuple(sorted(decision['perception'].items())))
             repeated_inspections = repeated_inspections + 1 if inspection == last_inspection else 1
@@ -326,6 +338,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
                                  getattr(tools, 'allow_vertical', False))
         try:
+            if mode == 'agent' and concise_instructions:
+                validate_stage_program(commands)
             if transport is not None:
                 transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
@@ -422,6 +436,8 @@ def main():
                         help='Consecutive transient decision failures allowed short policy continuation before stopping; 0 disables')
     parser.add_argument('--supervisor-stop-policy', choices=('halt', 'continue'), default='halt',
                         help='Simulator only: honor model stop, or retry the last executed policy instruction in short guarded bursts')
+    parser.add_argument('--max-stop-continuations', type=int, default=2,
+                        help='Maximum consecutive deferred Muse stops before honoring its stop (default: 2)')
     parser.add_argument('--max-navigation-bursts', type=int, default=6)
     parser.add_argument('--stall-bursts', type=int, default=4, help='Stationary bursts before requiring recovery; 0 disables')
     parser.add_argument('--placement-burst-steps', type=int, default=8)
@@ -444,6 +460,8 @@ def main():
         parser.error('--max-steps must be positive')
     if args.max_supervisor_failures < 0:
         parser.error('--max-supervisor-failures must be nonnegative')
+    if args.max_stop_continuations < 0:
+        parser.error('--max-stop-continuations must be nonnegative')
     if args.max_navigation_bursts < 0 or args.stall_bursts < 0:
         parser.error('Navigation and stall limits must be nonnegative')
     if not 1 <= args.placement_burst_steps <= args.decision_steps:
@@ -515,7 +533,7 @@ def main():
                     json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -596,6 +614,8 @@ def main():
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': args.subtask_budget_mode,
                     'supervisor_stop_policy': args.supervisor_stop_policy,
+                    'instruction_style': 'single_stage',
+                    'max_stop_continuations': args.max_stop_continuations,
                     'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
@@ -685,6 +705,8 @@ def main():
                     args.placement_burst_steps,
                     args.supervisor_stop_policy,
                     args.max_supervisor_failures,
+                    concise_instructions=True,
+                    max_stop_continuations=args.max_stop_continuations,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
@@ -697,6 +719,8 @@ def main():
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,
                     'planning_context': args.planning_context,
+                    'instruction_style': 'single_stage' if args.mode == 'agent' else 'original_or_fixed',
+                    'max_stop_continuations': args.max_stop_continuations,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'benchmark_membership': simulator_context['task']['benchmark_membership'],
                 }

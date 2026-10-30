@@ -39,7 +39,7 @@ SIMULATOR_GUIDE = {
         'Subtasks execute in the original task environment. Atomic-task names do not create or switch environments.',
         'Physical scene state persists across subtask transitions and replans.',
         'Independent unfinished goals may be reordered to use a visible or already-held required object. Preserve true dependencies, completed work, and every remaining goal.',
-        'Only listed tools exist. navigate wraps a fallible GR00T language request; no navigation planner, move_eef, IK solver, or generic pick/place primitive is installed.',
+        'Only listed tools exist. navigate wraps a fallible GR00T language request; no navigation planner, move_eef, IK solver, or manual pick/place primitive is installed. Separate pickup and placement language requests use run_groot.',
         'A run_groot instruction is a request to a fallible policy, not a guaranteed skill.',
         'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',
         'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
@@ -92,8 +92,8 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
                 'description_kind': catalog['description_kind'],
                 'tasks': [{key: entry[key] for key in ('name', 'category', 'description')}
                           for entry in catalog['tasks']],
-                'usage': 'Use these task-level sentence patterns for policy instructions; bind object/source/destination '
-                         'to the actual goal and scene. Preserve full object transfers. Templates are not executable tools '
+                'usage': 'Use this vocabulary to form concise single-action instructions for the actual goal. '
+                         'Separate pickup and placement; keep detailed grounding in memory and success criteria. Templates are not executable tools '
                          'or evidence of checkpoint competence. Exact demonstration annotations may differ.',
             },
         },
