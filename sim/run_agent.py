@@ -12,7 +12,7 @@ import numpy as np
 
 from core.agent import (parse_program, validate_decision, validate_stage_program,
                         validate_placement_destination)
-from core.scene_planning import inventory_updates, load_plan
+from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
@@ -666,6 +666,10 @@ def main():
                         'wall_seconds': time.monotonic() - request_started, **response})
                 previous_images = current
                 request_number += 1
+                if operation == 'plan' and response.get('validation_error'):
+                    record({'event': 'invalid_plan', 'step': tools.steps,
+                            'reason': response['validation_error'], 'request': request_number - 1})
+                    raise PlanValidationError(response['validation_error'])
                 return response['result']
 
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
@@ -693,7 +697,8 @@ def main():
                     initial_scene_assessment = starting_scene_assessment
                     scene_assessment_source = 'saved_plan_unverified' if initial_scene_assessment else None
                 else:
-                    generated = ask('plan', {'episode_horizon': max_steps})
+                    generated = request_grounded_plan(ask, {'episode_horizon': max_steps},
+                                                      {f'current:{key}' for key in camera_keys})
                     plan, initial_scene_assessment = load_plan(generated)
                     scene_assessment_source = 'current_plan_visual_claim'
                     entries = inventory_updates(initial_scene_assessment)

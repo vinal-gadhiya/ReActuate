@@ -1,6 +1,7 @@
 """Public visual survey required before generating a new task plan."""
 
 from copy import deepcopy
+import re
 
 from core.agent import PLAN_SCHEMA, validate_plan
 
@@ -29,6 +30,73 @@ GROUNDED_PLAN_SCHEMA = record({
     'scene_assessment': SURVEY_SCHEMA,
     'steps': deepcopy(PLAN_SCHEMA['properties']['steps']),
 })
+
+
+class PlanValidationError(ValueError):
+    """A model plan needs correction; the request itself was well formed."""
+
+
+def grounded_plan_schema(cameras):
+    schema = deepcopy(GROUNDED_PLAN_SCHEMA)
+    schema['properties']['scene_assessment']['properties']['entities']['items']['properties']['cameras']['items']['enum'] = sorted(cameras)
+    return schema
+
+
+def normalize_plan_cameras(result, cameras):
+    """Resolve only unambiguous aliases of supplied current views, never before views."""
+    result = deepcopy(result)
+    aliases = {}
+    for camera in cameras:
+        if not camera.startswith('current:'):
+            continue
+        base = camera[len('current:'):]
+        short = base.removeprefix('video.')
+        short = re.sub(r'^robot\d+_', '', short)
+        variants = {camera, base, base.removeprefix('video.'), short}
+        if short.startswith('agentview_'):
+            variants.add(short[len('agentview_'):])
+        if short == 'eye_in_hand':
+            variants.add('wrist')
+        variants |= {'current:' + name for name in variants if not name.startswith('current:')}
+        for name in variants:
+            aliases.setdefault(name.casefold(), set()).add(camera)
+    survey = result.get('scene_assessment') if isinstance(result, dict) else None
+    entities = survey.get('entities', []) if isinstance(survey, dict) else []
+    if not isinstance(entities, list):
+        return result
+    for entity in entities:
+        views = entity.get('cameras') if isinstance(entity, dict) else None
+        if not isinstance(views, list) or any(not isinstance(view, str) for view in views):
+            continue
+        if len(set(views)) != len(views):
+            raise PlanValidationError('Duplicate scene entity camera references')
+        normalized = []
+        for view in views:
+            matches = {view.strip()} if view.strip() in cameras else aliases.get(view.strip().casefold(), set())
+            if len(matches) != 1:
+                raise PlanValidationError(f'Unknown or ambiguous current camera {view!r}; use exactly one of {sorted(cameras)}')
+            canonical = next(iter(matches))
+            if canonical not in normalized:
+                normalized.append(canonical)
+        entity['cameras'] = normalized
+    return result
+
+
+def request_grounded_plan(ask, context, cameras, max_attempts=3):
+    """Retry invalid plans without motion; ask owns API budgets and audit records."""
+    feedback = None
+    for _ in range(max_attempts):
+        try:
+            result = ask('plan', {**context, 'plan_validation_feedback': feedback,
+                                  'allowed_current_cameras': sorted(cameras)})
+            if result is None:
+                raise RuntimeError('API budget exhausted before a valid initial plan was available')
+            result = normalize_plan_cameras(result, cameras)
+            validate_grounded_plan(result, cameras)
+            return result
+        except ValueError as error:
+            feedback = str(error)
+    raise PlanValidationError(f'No valid initial plan after {max_attempts} attempts: {feedback}')
 
 
 def validate_scene_assessment(survey, cameras=None):

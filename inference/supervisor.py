@@ -11,7 +11,7 @@ import numpy as np
 
 from core.agent import (DECISION_SCHEMA, parse_program, validate_decision,
                         validate_plan, validate_stage_program, validate_placement_destination)
-from core.scene_planning import GROUNDED_PLAN_SCHEMA, validate_grounded_plan
+from core.scene_planning import grounded_plan_schema, normalize_plan_cameras, validate_grounded_plan
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
 from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
@@ -100,6 +100,9 @@ SCENE FIRST, ORDER SECOND: Before listing steps, fill scene_assessment from ALL
 current camera views. Inventory task-relevant entities with visibility, location,
 access (apparently_reachable/needs_approach/blocked/unknown), camera labels, and
 evidence. Include relevant fixture/access state and each actual destination.
+For entities.cameras copy the EXACT supplied current image labels; use only
+the values in the camera schema enum. Never cite before views as current evidence.
+If plan_validation_feedback is supplied, correct it using the same current images.
 Unknown is preferable to invented reachability; use wrist AND external evidence,
 not image size alone. Missing detections do not mean absence. Distinguish an
 exposed accessible source from an object requiring travel or uncertain access.
@@ -326,12 +329,17 @@ class Supervisor:
             # Keep the established tool schema; only its selected executor changes.
             prompt = prompt.replace('GR00T', 'PatchWAM')
             prompt += '\nrun_groot is the compatibility tool name for calling the selected PatchWAM policy. No GR00T model is used in this run.'
-        schema = GROUNDED_PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
+        current_cameras = {key for key in images if key.startswith('current:')}
+        schema = grounded_plan_schema(current_cameras) if operation == 'plan' else DECISION_SCHEMA
         result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
         validation_error = None
         if operation == 'plan':
-            validate_grounded_plan(result, {key for key in images if key.startswith('current:')})
+            try:
+                result = normalize_plan_cameras(result, current_cameras)
+                validate_grounded_plan(result, current_cameras)
+            except (ValueError, KeyError, TypeError) as error:
+                validation_error = str(error)
         else:
             try:
                 validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],

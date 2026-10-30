@@ -6,7 +6,9 @@ import unittest
 
 import numpy as np
 
-from core.scene_planning import GROUNDED_PLAN_SCHEMA, inventory_updates, load_plan, validate_grounded_plan
+from core.scene_planning import (GROUNDED_PLAN_SCHEMA, PlanValidationError, grounded_plan_schema,
+                                inventory_updates, load_plan, normalize_plan_cameras,
+                                request_grounded_plan, validate_grounded_plan)
 from core.agent import validate_placement_destination
 from core.scene_memory import SceneMemory
 from inference.supervisor import Supervisor
@@ -58,7 +60,7 @@ class ScenePlanningTests(unittest.TestCase):
         self.assertEqual(reply['api_calls'], 1)
         self.assertEqual(reply['result'], expected)
         content, prompt, schema = captured[0]
-        self.assertEqual(schema, GROUNDED_PLAN_SCHEMA)
+        self.assertEqual(schema, grounded_plan_schema(self.cameras))
         self.assertEqual([item['text'] for item in content[1:] if item['type'] == 'input_text'], sorted(images))
         self.assertEqual(sum(item['type'] == 'input_image' for item in content), 3)
         self.assertIn('SCENE FIRST, ORDER SECOND', prompt)
@@ -67,6 +69,68 @@ class ScenePlanningTests(unittest.TestCase):
         self.assertEqual(survey, expected['scene_assessment'])
         survey['entities'].clear()
         self.assertEqual(len(reply['result']['scene_assessment']['entities']), 4)
+
+    def test_schema_limits_camera_references_to_actual_current_views(self):
+        schema = grounded_plan_schema(self.cameras)
+        items = schema['properties']['scene_assessment']['properties']['entities']['items']['properties']['cameras']['items']
+        self.assertEqual(items['enum'], sorted(self.cameras))
+        original = GROUNDED_PLAN_SCHEMA['properties']['scene_assessment']['properties']['entities']['items']['properties']['cameras']['items']
+        self.assertNotIn('enum', original)
+
+    def test_unambiguous_camera_aliases_are_normalized_without_mutating_model_output(self):
+        cameras = {'current:video.robot0_agentview_left', 'current:video.robot0_agentview_right',
+                   'current:video.robot0_eye_in_hand'}
+        original = tea_plan()
+        result = normalize_plan_cameras(original, cameras)
+        validate_grounded_plan(result, cameras)
+        self.assertEqual(result['scene_assessment']['entities'][0]['cameras'], ['current:video.robot0_eye_in_hand'])
+        self.assertEqual(result['scene_assessment']['entities'][1]['cameras'], ['current:video.robot0_agentview_right'])
+        self.assertEqual(original['scene_assessment']['entities'][0]['cameras'], ['current:wrist'])
+
+    def test_invented_before_and_ambiguous_views_are_not_silently_remapped(self):
+        for view in ('current:invented', 'before:left'):
+            value = tea_plan()
+            value['scene_assessment']['entities'][0]['cameras'] = [view]
+            with self.subTest(view=view), self.assertRaises(PlanValidationError):
+                normalize_plan_cameras(value, self.cameras)
+        value = tea_plan()
+        value['scene_assessment']['entities'][0]['cameras'] = ['left']
+        with self.assertRaises(PlanValidationError):
+            normalize_plan_cameras(value, {'current:video.robot0_agentview_left',
+                                          'current:video.robot1_agentview_left'})
+
+    def test_invalid_plan_gets_bounded_correction_before_any_execution(self):
+        calls = []
+        invalid = tea_plan()
+        invalid['scene_assessment']['entities'][0]['cameras'] = ['current:invented']
+        replies = iter([invalid, tea_plan()])
+
+        def ask(operation, context):
+            calls.append((operation, context))
+            return next(replies)
+
+        result = request_grounded_plan(ask, {'episode_horizon': 100}, self.cameras)
+        self.assertEqual(len(calls), 2)
+        self.assertIn('current:invented', calls[1][1]['plan_validation_feedback'])
+        self.assertEqual(calls[1][1]['allowed_current_cameras'], sorted(self.cameras))
+        self.assertEqual(result['steps'][0]['instruction'], 'Pick up the mug.')
+        with self.assertRaisesRegex(PlanValidationError, 'after 3 attempts'):
+            request_grounded_plan(lambda *args: invalid, {}, self.cameras)
+        with self.assertRaisesRegex(RuntimeError, 'API budget exhausted'):
+            request_grounded_plan(lambda *args: None, {}, self.cameras)
+
+    def test_invalid_model_plan_preserves_api_usage_and_returns_feedback(self):
+        class API:
+            def response(self, *args, **kwargs):
+                invalid = tea_plan()
+                invalid['scene_assessment']['entities'][0]['cameras'] = ['before:wrist']
+                return invalid, {'model': 'muse', 'usage': {'output_tokens': 12}}
+
+        result = Supervisor(API(), 'muse').handle('plan', {'api_calls_left': 1},
+            {key: np.zeros((4, 6, 3), np.uint8) for key in self.cameras})
+        self.assertEqual(result['api_calls'], 1)
+        self.assertEqual(result['audit'][0]['usage']['output_tokens'], 12)
+        self.assertIn('before:wrist', result['validation_error'])
 
     def test_generated_plan_requires_survey_and_real_camera_references(self):
         cases = []

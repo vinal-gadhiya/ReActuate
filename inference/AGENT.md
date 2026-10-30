@@ -84,6 +84,14 @@ requests with its source, and summarized in the episode notebook. Saved plan
 surveys are labeled historical/unverified and never seeded as fresh observations.
 Legacy operator plans containing only `steps` remain accepted.
 
+Generated survey camera references are constrained to the actual current labels
+in the request schema. Unambiguous short aliases are normalized to those labels;
+unknown, ambiguous, and `before:` references are rejected. Invalid model plans
+return validation feedback with API usage preserved and receive up to three
+budgeted attempts before any physical execution. Healthy planning still uses
+one API call. The trace records `invalid_plan` and the next request's correction
+feedback if the first proposal needs repair.
+
 Before first motion Muse should correct an obviously unsuitable initial order.
 After confirmed placement it should chain eligible work already at the destination,
 preserving actual dependencies and final fixture requirements. If a useful object
