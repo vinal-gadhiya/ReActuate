@@ -37,6 +37,72 @@ to reassess; the selected frozen policy owns every physical action. Allow useful
 skills to run within the supplied decision_step_limit; retaining a grasp or
 seeing a destination alone is not a reason to reduce every burst to a few steps.'''
 
+OUTCOME_SUPERVISION_PROMPT = '''Apply this feedback loop to EVERY task, not just
+transfers: identify the intended entity, choose a supported policy goal, compare
+its expected visible effect against the next observation, and correct the next
+instruction when that effect did not occur. Consult execution_feedback as well
+as the plan. Its actual instruction/step counters survive subtask renaming;
+same_assessment_bursts measures unchanged reported phase/grasp, not verified
+failure. Explain concrete visual progress if continuing several such bursts.
+Movement, an available budget, or policy completion of an action sequence alone
+does not establish the intended effect. Avoid repeated ineffective inspection
+queries at the same pose even when the query wording or camera changes.
+
+ENTITY CONTINUITY: Compare scene_memory identity_anchor, observations, and
+previous_location_claim with current appearance and fixture-relative relations.
+Earlier claims can be wrong: retain and explicitly resolve conflicting evidence,
+not blindly trust the anchor or overwrite it with the newest guess. Camera-left
+is not a stable world location. A viewpoint change is not object transport.
+Use separate, descriptive instance names for distinct candidates or similar
+fixtures. Missing SAM boxes do not disprove an object; a SAM class match alone
+does not identify the intended instance. Never merge different-looking objects
+under one name without evidence explaining the discrepancy. Gripper pads, handles,
+and appliance parts are not automatically held task objects.
+
+GROUNDED CORRECTIONS: The executor receives the policy instruction and its own
+images/state; it does NOT receive your memory, SAM boxes, or reasoning. Put the
+necessary observed appearance, instance, source, and destination distinctions
+into a concise task-level instruction. Preserve the trained catalog sentence
+structure, adding supported object attributes or fixture-relative relations when
+needed to distinguish a distractor. Do not send pixel boxes or invented coordinates
+as if the executor understands pointing. 'This object' is not a grounded reference.
+When source/destination is not accessible, choose supported fixture navigation
+or access work before resuming the pending manipulation. Navigation must actually
+improve access/view before being treated as successful. Named-fixture navigation
+does not support arbitrary remembered position commands.
+
+OUTCOME CHECKS: For acquisition, look for the intended object leaving its support
+and moving with the fingers across withdrawal. If it stays behind while the arm
+withdraws empty, acquisition failed: correct target/approach instructions before
+continuing transport or placement. If contact/identity is occluded, report uncertain
+and gather temporal evidence; do not claim carry from closure or a close-up alone.
+For placement, require the intended object resting on/in the intended support and
+the gripper released/clear, not just an opening command at the destination.
+For articulated fixtures, track the SAME relevant door/drawer/component across
+views: partial movement, a reopened component, or a different closed panel does
+not satisfy closure. For other tasks, derive the visible state change from the
+original goal and success criteria rather than applying a universal grasp rule.
+
+Choose feedback intervals around expected transitions: allow travel and productive
+skills to continue, but reassess around acquisition withdrawal, release, or final
+fixture movement when mistaken execution would compound. Where practical, align
+bursts with execution_limits.policy_chunk_steps to avoid discarding prediction
+tails; this is an efficiency hint, not a mandatory cap. Do not assume pickup-only,
+placement-only, pointing, or arbitrary-position skills are reliable just because
+a full-transfer skill exists. Prefer supported catalog goals and preserve an
+effective full-transfer instruction; correct its grounded referent when wrong.
+Decompose into navigation/access/transfer/verification goals when useful, not
+untrained reach/grasp/lift motor primitives. Never introduce manual controls.
+
+GOAL PERSISTENCE: Accepted completions are dated claims, not permanent facts.
+Recheck relevant completed conditions after later actions can disturb them and
+before declaring the whole task complete. If evidence contradicts a completed
+claim, explicitly report the contradiction and use a new repair subtask ID in a
+replan while preserving all other unmet goals. Completion of the last planned
+step alone does not prove the entire original goal. If no replan budget remains,
+use a supported corrective policy instruction within the active goal when possible,
+or report the unresolved requirement rather than falsely declaring completion.'''
+
 MEMORY_PROMPT = '''Maintain explicit episode-local visual memory on every decide
 response. assessment reports phase (access/acquire/carry/locate_destination/place/
 recover/unknown), held_object (empty string if unknown), grasp (supported/uncertain/
@@ -435,7 +501,8 @@ class Supervisor:
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
-        prompt = '\n\n'.join([IN_CONTEXT_PLANNING_PROMPT, MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
+        prompt = '\n\n'.join([IN_CONTEXT_PLANNING_PROMPT, OUTCOME_SUPERVISION_PROMPT,
+                                MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
                                 PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
         if context.get('control_owner') == 'patchwam':
             # Keep the established tool schema; only its selected executor changes.

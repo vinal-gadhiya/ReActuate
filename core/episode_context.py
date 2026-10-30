@@ -41,6 +41,25 @@ class EpisodeContext:
         self.recovery_count = 0
         self.event_count = 0
         self.latest_decision = None
+        self.instruction_attempts = OrderedDict()
+        self.pending_executions = []
+        self.outcome_reviews = deque(maxlen=8)
+
+    @staticmethod
+    def assessment_signature(assessment):
+        return tuple(assessment.get(key) for key in ('phase', 'held_object', 'grasp'))
+
+    def execution_feedback(self):
+        return deepcopy({
+            'instruction_attempts': list(self.instruction_attempts.values())[-16:],
+            'recent_outcome_reviews': list(self.outcome_reviews),
+            'executions_awaiting_review': self.pending_executions,
+            'interpretation': 'Actual execution counts paired with subsequent Muse assessments. '
+                              'Unchanged assessment means no reported phase/grasp transition, not proof of failure: '
+                              'use temporal images to distinguish useful approach from repeating a missed action. '
+                              'Changed assessment is also a model claim, not verified progress. '
+                              'Feedback never changes policy actions or execution intervals.',
+        })
 
     def observe(self, event):
         kind = event['event']
@@ -63,7 +82,20 @@ class EpisodeContext:
             item.update(status=event['status'], evidence=short(event['evidence']))
             assessment = event.get('assessment', {})
             item.update(phase=assessment.get('phase'), held_object=assessment.get('held_object'),
-                        grasp=assessment.get('grasp'))
+                        grasp=assessment.get('grasp'), destination=short(assessment.get('destination', ''), 180))
+            for execution in self.pending_executions:
+                attempt = self.instruction_attempts[execution['key']]
+                changed = self.assessment_signature(execution['assessment_before']) != self.assessment_signature(assessment)
+                attempt['same_assessment_bursts'] = 0 if changed else attempt['same_assessment_bursts'] + 1
+                self.outcome_reviews.append({
+                    'subtask': execution['subtask'], 'instruction': execution['instruction'],
+                    'step_before': execution['step_before'], 'step_after': execution['step_after'],
+                    'review_step': step, 'assessment_before': execution['assessment_before'],
+                    'assessment_after': {key: assessment.get(key) for key in ('phase', 'held_object', 'grasp')},
+                    'assessment_changed': changed, 'evidence': short(event['evidence']),
+                    'same_assessment_bursts': attempt['same_assessment_bursts'],
+                })
+            self.pending_executions = []
             self.latest_decision = dict(item)
             for entry in event.get('memory_updates', []):
                 key = (entry['kind'], entry['name'].casefold().strip())
@@ -95,6 +127,28 @@ class EpisodeContext:
                 self.attempts.popitem(last=False)
             self.total_steps += count
             self.total_bursts += 1
+            if count > 0:
+                key = ' '.join(instruction.casefold().split())
+                attempt = self.instruction_attempts.setdefault(key, {
+                    'instruction': short(instruction, 240), 'bursts': 0,
+                    'executed_steps': 0, 'same_assessment_bursts': 0})
+                attempt.update(bursts=attempt['bursts'] + 1,
+                               executed_steps=attempt['executed_steps'] + count, last_execution_step=step)
+                self.instruction_attempts.move_to_end(key)
+                self.pending_executions.append({
+                    'key': key, 'subtask': subtask, 'instruction': short(instruction, 240),
+                    'step_before': event['step_before'], 'step_after': step,
+                    'assessment_before': {field: (self.latest_decision or {}).get(field)
+                                          for field in ('phase', 'held_object', 'grasp')},
+                })
+                self.pending_executions = self.pending_executions[-12:]
+                # Pending events must still find their counters at review time.
+                pending_keys = {entry['key'] for entry in self.pending_executions}
+                for oldest in list(self.instruction_attempts):
+                    if len(self.instruction_attempts) <= 32:
+                        break
+                    if oldest not in pending_keys:
+                        del self.instruction_attempts[oldest]
         elif kind == 'subtask_transition':
             accepted = {'id': event['completed_step']['id'],
                         'instruction': short(event['completed_step']['instruction'], 180),

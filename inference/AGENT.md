@@ -339,6 +339,31 @@ request context in `trace.jsonl`; no extra summarization API call is made.
 Use `--planning-context recent` to omit the notebook for an ablation, retaining
 the existing recent-event window, accepted handoffs, and object memory.
 
+All agent tasks also receive `execution_feedback`, pairing actual policy bursts
+with the next valid Muse assessment. Instruction counters survive subtask renaming;
+unchanged phase/grasp reports prompt review even if the robot keeps moving. These
+are advisory model-claim comparisons, not automatic failure detection or motor
+interventions. API failures/invalid proposals do not count as visual reviews.
+`execution_feedback.json` saves the latest snapshot in the episode directory.
+
+Scene memory retains an earlier `identity_anchor`, up to six changed observations
+per entity, and the preceding location claim. These are fallible historical
+claims for resolving appearance/location conflicts, not a verified object tracker.
+Additional identity-history content in each request is budgeted to 24,000
+characters; `identity_history_records_omitted` reports omitted records. Current
+entries are retained, and internal history remains available for later requests.
+
+Supervision checks the visible outcome relevant to each goal: acquisition during
+withdrawal, support and release for placement, actual arrival for navigation,
+the same articulated component for fixture operations, or the state change in
+another task's success criteria. Muse should put grounded instance attributes
+and source/destination relations into corrective policy instructions: policy
+inference does not receive Muse's notebook or SAM boxes. Supported navigation,
+access, transfer, and verification goals can be sequenced without inventing
+position commands or assuming standalone pickup skills. A contradicted completed
+goal requires a new repair goal; the historical completion claim remains in the
+trace. Guidance and retained evidence do not guarantee correct visual judgments.
+
 There is no mandatory scouting tour. Each decision supplies a structured
 assessment of transfer phase, possible held-object identity, grasp uncertainty,
 destination, missing information, and evidence. Object/fixture memory is owned

@@ -1,6 +1,7 @@
 """Episode-local visual claims and bounded information-gathering state; no simulator internals."""
 
 from copy import deepcopy
+import json
 import re
 
 
@@ -55,6 +56,8 @@ def validate_scene_fields(decision):
 
 
 class SceneMemory:
+    IDENTITY_CONTEXT_CHARS = 24000
+
     def __init__(self):
         self.entries = {}
         self.assessment = None
@@ -73,8 +76,24 @@ class SceneMemory:
         for entry in decision['memory_updates']:
             key = (entry['kind'], entry['name'].casefold().strip())
             old = self.entries.get(key, {})
+            # Keep earlier identity evidence when a newer claim changes the
+            # referent. Text/location changes are review cues, not proof that
+            # an object moved or that the latest identification is correct.
+            observation = {'step': step, 'request': request, **deepcopy(entry)}
+            observations = deepcopy(old.get('observations', []))
+            if not observations or any(observations[-1][field] != entry[field]
+                                       for field in ('location', 'status', 'evidence')):
+                observations = (observations + [observation])[-6:]
+            anchor = old.get('identity_anchor')
+            if anchor is None and entry['status'] in ('visible', 'held', 'placed'):
+                anchor = observation
+            previous = old.get('previous_location_claim')
+            if old and entry['location'] != old['location']:
+                previous = {field: old[field] for field in ('location', 'status', 'evidence', 'observation_step')}
             last_seen = step if entry['status'] == 'visible' else old.get('last_seen_step')
             self.entries[key] = {**deepcopy(entry), 'observation_step': step, 'request': request,
+                                 'identity_anchor': deepcopy(anchor), 'observations': observations,
+                                 'previous_location_claim': deepcopy(previous),
                                  'last_seen_step': last_seen,
                                  'last_seen_location': entry['location'] if entry['status'] == 'visible' else old.get('last_seen_location'),
                                  'last_seen_evidence': entry['evidence'] if entry['status'] == 'visible' else old.get('last_seen_evidence')}
@@ -86,12 +105,36 @@ class SceneMemory:
         self.perception = deepcopy(decision['perception'])
 
     def context(self):
-        return {'entries': list(self.entries.values()), 'assessment': self.assessment,
-                'recent_assessments': self.assessments, 'next_perception': self.perception,
+        entries = deepcopy(list(self.entries.values()))
+        budget, omitted = self.IDENTITY_CONTEXT_CHARS, 0
+        # Preserve anchors before allocating history detail; prefer the most
+        # recently reviewed entities if the additional prompt budget fills up.
+        ordered = sorted(entries, key=lambda entry: (entry['request'], entry['observation_step']), reverse=True)
+        history = {id(entry): {field: entry.pop(field) for field in
+                              ('identity_anchor', 'previous_location_claim', 'observations')} for entry in entries}
+        for field in ('identity_anchor', 'previous_location_claim', 'observations'):
+            for entry in ordered:
+                value = history[id(entry)][field]
+                values = list(reversed(value)) if field == 'observations' else [value]
+                retained = []
+                for claim in values:
+                    cost = len(json.dumps({field: claim}, ensure_ascii=False))
+                    if claim is not None and cost <= budget:
+                        retained.append(claim)
+                        budget -= cost
+                    elif claim is not None:
+                        omitted += 1
+                entry[field] = list(reversed(retained)) if field == 'observations' else (retained[0] if retained else None)
+        return {'entries': entries, 'assessment': deepcopy(self.assessment),
+                'identity_history_records_omitted': omitted,
+                'recent_assessments': deepcopy(self.assessments), 'next_perception': deepcopy(self.perception),
                 'navigation_bursts': self.navigation_bursts, 'last_navigation': self.last_navigation,
                 'stationary_bursts': self.stall_streak,
                 'interpretation': 'Time-stamped visual/model claims, not simulator truth. Reobserve moved, held, '
-                                  'occluded, or stale objects. A historical box is not a current 3D location.'}
+                                  'occluded, or stale objects. A historical box is not a current 3D location. '
+                                  'Identity anchors and observation histories are fallible earlier claims, not verified identities. '
+                                  'Compare appearance and fixture-relative locations before replacing a referent; '
+                                  'a changed location may reflect viewpoint, wording, motion, or misidentification.'}
 
     def authorize_navigation(self, fixture, limit):
         if not re.search(r'\b(sink|fridge|refrigerator|oven|microwave|dishwasher|coffee machine|cabinet|'

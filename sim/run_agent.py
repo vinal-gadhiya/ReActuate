@@ -511,6 +511,8 @@ def main():
             if episode_context.observe(event):
                 (directory / 'episode_context.json').write_text(
                     json.dumps(episode_context.context(event.get('step', event.get('step_after', 0))), indent=2) + '\n')
+                (directory / 'execution_feedback.json').write_text(
+                    json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
             if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
@@ -573,6 +575,7 @@ def main():
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
+                    'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
@@ -603,6 +606,7 @@ def main():
                         'step_unit': 'one executed environment control step, not seconds or API calls',
                         'control_frequency_hz': float(env.unwrapped.env.control_freq),
                         'decision_steps': args.decision_steps, 'decisions_left': decisions_left,
+                        'policy_chunk_steps': args.action_steps,
                         'api_calls_left': calls_left, 'motion_step_upper_bound': motion_bound,
                         'note': 'Optimistic bound: verification, planning, SAM, and replanning consume API calls too.',
                     },

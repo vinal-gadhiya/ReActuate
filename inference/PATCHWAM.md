@@ -153,6 +153,16 @@ claims remain fallible and must be checked against fresh observations. All memor
 resets for a new episode. No extra model calls, geometry controllers, gripper
 overrides, or changes to PatchWAM/GR00T inference are introduced.
 
+Across all tasks, Muse additionally receives `execution_feedback`: actual
+instruction counts and subsequent phase/grasp assessments, including retries
+across replans. Scene memory preserves historical instance evidence so a new
+location/appearance claim can be checked against earlier claims. Guidance covers
+target disambiguation, failed acquisition, placement, articulated fixtures,
+navigation, and revisiting contradicted completed goals. These checks remain
+fallible visual judgments; the harness adds no automatic grasp detector or manual
+controller. The latest feedback is saved in `execution_feedback.json` and sent
+in both planning-context modes. See [the agent guide](AGENT.md#on-demand-information-gathering-and-object-memory).
+
 Inspect `episode-000/episode_context.json` for the latest notebook and
 `supervisor_request` events in `trace.jsonl` for the exact context sent to Muse.
 `scene_memory.json` retains current semantic entries and their observation times.
