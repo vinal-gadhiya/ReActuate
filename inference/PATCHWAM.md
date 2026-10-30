@@ -119,6 +119,17 @@ commands. The runner enforces one action call per decision and a 12-word,
 96-character policy instruction limit. These language-stage skills still need
 rollout validation; the frozen policy and baseline instruction are unchanged.
 
+New plans include a scene inventory, apparent access, first-action rationale and
+route rationale before listing stages, using all current cameras in the same
+planning API call. This lets Muse prioritize exposed targets in the current
+workspace and chain eligible work at a shared destination rather than follow the
+order of nouns in the original task. These are visual hypotheses, not verified
+reachability or guaranteed optimal plans. Inspect `scene_assessment.json` and
+`plan.json` before the rollout or use `--plan-only` with a fresh output directory.
+Generate a fresh plan to exercise this change; supplied plans remain supported
+and their surveys are labeled historical. Explicit placement destinations are
+checked against the active stage to reject silent support/receptacle changes.
+
 With `--supervisor-stop-policy continue`, `--max-stop-continuations 2` (default)
 allows two consecutive deferred stops, then ends with `supervisor_stop_retry_limit`.
 This bounds the repeated stop/16-step-retry loop; set it to 0 to honor the first

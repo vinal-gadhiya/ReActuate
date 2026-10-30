@@ -39,6 +39,11 @@ placement are separate language goals; access/opening is conditional on an
 observed obstruction or explicit requirement. The runner rejects multi-action
 commands or instructions over 12 words/96 characters without executing them.
 Detailed scene grounding stays in supervisor context. Baseline text is unchanged.
+Generated plans include a visual inventory, apparent access, first-action
+rationale and route rationale, recorded in `scene_assessment.json` and `plan.json`.
+Current survey claims seed memory before the first decision without motion or an
+extra model call. Supplied-plan surveys remain historical. Explicit placement
+destinations are checked against the active stage before execution.
 
 `run_agent.py` and `compare.py` accept `--supervisor-stop-policy continue` for
 simulation comparisons that should keep trying within the episode budget. A Muse

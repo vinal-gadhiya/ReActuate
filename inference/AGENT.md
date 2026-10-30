@@ -70,6 +70,31 @@ metadata records the catalog revision, task count, and grounding strategy.
 
 Muse now uses concise single-action stages across all agent tasks. The catalog
 provides reference vocabulary rather than requiring full-transfer sentences.
+
+Generated plans now require `scene_assessment` before `steps` in the planning
+response: a task-relevant inventory with camera references, visibility, location
+and apparent access, ordering constraints, the first-action rationale, and route
+rationale. Muse surveys all current views and compares accessible targets with
+targets needing approach; original task mention order is not an execution order.
+The survey and plan share one API call and execute no physical scan. Visual
+access is an attributed hypothesis, not metric reachability or optimal routing.
+Current survey entries seed semantic memory before the first decision. The full
+survey is saved in `scene_assessment.json` and `plan.json`, sent on subsequent
+requests with its source, and summarized in the episode notebook. Saved plan
+surveys are labeled historical/unverified and never seeded as fresh observations.
+Legacy operator plans containing only `steps` remain accepted.
+
+Before first motion Muse should correct an obviously unsuitable initial order.
+After confirmed placement it should chain eligible work already at the destination,
+preserving actual dependencies and final fixture requirements. If a useful object
+has already been acquired for another goal, replan to finish its required placement
+instead of insisting on the original first object or a temporary setdown.
+The runner additionally rejects placement commands that change an explicitly
+planned support/receptacle or containment relation. This checks recognizable
+`place/put ... on/in/...` text against the active stage, not simulator geometry
+or the correctness of a model-generated plan. Exact names and essential modifiers
+are preserved; this is not a general synonym resolver or automatic plan repair.
+
 For example: `Pick up the cup.` followed, after confirmed acquisition, by
 `Place the cup on the tray.` Navigation, opening, closing, pouring, washing and
 other task-relevant actions are separate stages when needed. Keep an instruction

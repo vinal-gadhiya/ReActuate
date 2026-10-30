@@ -19,6 +19,15 @@ def step(identifier, instruction):
             'success_criteria': 'Door is visibly open', 'max_steps': 10}
 
 
+def scene_assessment():
+    return {'entities': [{'name': 'cabinet', 'kind': 'fixture', 'visibility': 'visible',
+                          'location': 'current workspace', 'access': 'unknown',
+                          'cameras': ['current:camera'], 'evidence': 'Door visible.'}],
+            'ordering_constraints': 'Preserve all original requirements.',
+            'first_action_rationale': 'Check access at the current workspace.',
+            'route_rationale': 'Complete nearby eligible work before travelling.'}
+
+
 def decision(status='continue', program='run_groot(instruction="open cabinet", steps=4)', replacement=None):
     return {'status': status, 'evidence': 'Door remains closed in the current image.',
             'program': program, 'replacement_steps': replacement or [],
@@ -478,7 +487,7 @@ class AgentTests(unittest.TestCase):
         class FakeAPI:
             def response(self, model, content, instructions=None, schema=None):
                 calls.append((model, schema))
-                return {'steps': [step('a', 'open cabinet')]}, {'usage': {}, 'output': 'fake'}
+                return {'steps': [step('a', 'open cabinet')], 'scene_assessment': scene_assessment()}, {'usage': {}, 'output': 'fake'}
 
         supervisor = Supervisor(FakeAPI(), 'test-model', use_sam=True)
         reply = supervisor.handle('plan', {'api_calls_left': 1}, {'current:camera': np.zeros((4, 6, 3), dtype=np.uint8)})
@@ -491,7 +500,7 @@ class AgentTests(unittest.TestCase):
         class FakeAPI:
             def response(self, model, content, instructions=None, schema=None):
                 requests.append((json.loads(content[0]['text']), instructions))
-                result = {'steps': [step('a', 'open fridge')]} if len(requests) == 1 else decision()
+                result = {'steps': [step('a', 'open fridge')], 'scene_assessment': scene_assessment()} if len(requests) == 1 else decision()
                 return result, {'model': model}
 
         supervisor = Supervisor(FakeAPI(), 'test-model')

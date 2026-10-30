@@ -37,7 +37,15 @@ def validate_scene_fields(decision):
             raise ValueError(f'Invalid assessment {key}')
     if not assessment['evidence'].strip() or (assessment['grasp'] == 'supported' and not assessment['held_object'].strip()):
         raise ValueError('Grasp assessment needs evidence and supported grasps need object identity')
-    updates = decision['memory_updates']
+    validate_memory_updates(decision['memory_updates'])
+    perception = decision['perception']
+    if (not isinstance(perception, dict) or set(perception) != {'target', 'camera', 'mode'}
+            or perception['mode'] not in ('detect', 'track')
+            or any(not isinstance(perception[key], str) or len(perception[key]) > 160 for key in ('target', 'camera'))):
+        raise ValueError('Invalid next perception query')
+
+
+def validate_memory_updates(updates):
     if not isinstance(updates, list) or len(updates) > 12:
         raise ValueError('At most 12 memory updates per decision')
     for entry in updates:
@@ -48,11 +56,6 @@ def validate_scene_fields(decision):
             if not isinstance(value, str) or not value.strip() or len(value) > 500 or (
                     'enum' in specification and value not in specification['enum']):
                 raise ValueError(f'Invalid memory {key}')
-    perception = decision['perception']
-    if (not isinstance(perception, dict) or set(perception) != {'target', 'camera', 'mode'}
-            or perception['mode'] not in ('detect', 'track')
-            or any(not isinstance(perception[key], str) or len(perception[key]) > 160 for key in ('target', 'camera'))):
-        raise ValueError('Invalid next perception query')
 
 
 class SceneMemory:
@@ -73,7 +76,13 @@ class SceneMemory:
         claim = {'step': step, 'request': request, **deepcopy(decision['assessment'])}
         self.assessment = claim
         self.assessments = (self.assessments + [claim])[-12:]
-        for entry in decision['memory_updates']:
+        self.perception = deepcopy(decision['perception'])
+        self.update_entries(decision['memory_updates'], step, request)
+
+    def update_entries(self, entries, step, request):
+        """Record visual inventory without inventing an execution/grasp assessment."""
+        validate_memory_updates(entries)
+        for entry in entries:
             key = (entry['kind'], entry['name'].casefold().strip())
             old = self.entries.get(key, {})
             # Keep earlier identity evidence when a newer claim changes the
@@ -102,7 +111,6 @@ class SceneMemory:
             oldest = sorted(self.entries, key=lambda key: self.entries[key]['observation_step'])
             for key in oldest[:len(self.entries) - 48]:
                 del self.entries[key]
-        self.perception = deepcopy(decision['perception'])
 
     def context(self):
         entries = deepcopy(list(self.entries.values()))

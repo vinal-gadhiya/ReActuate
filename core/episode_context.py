@@ -41,6 +41,7 @@ class EpisodeContext:
         self.recovery_count = 0
         self.event_count = 0
         self.latest_decision = None
+        self.initial_scene_assessment = None
         self.instruction_attempts = OrderedDict()
         self.pending_executions = []
         self.outcome_reviews = deque(maxlen=8)
@@ -71,6 +72,13 @@ class EpisodeContext:
             self.goal = short(event['goal'], 2000)
             self.initial_plan = deepcopy(event['steps'])
             self.active_plan = deepcopy(event['steps'])
+            survey = event.get('scene_assessment')
+            if survey is not None:
+                self.initial_scene_assessment = {
+                    'source': event.get('scene_assessment_source'),
+                    **{key: short(survey[key], 500) for key in
+                       ('ordering_constraints', 'first_action_rationale', 'route_rationale')},
+                }
         elif kind == 'plan_replaced':
             # Only accepted runner events change the plan, never a proposal.
             self.active_plan = deepcopy(event['steps'])
@@ -174,6 +182,7 @@ class EpisodeContext:
             'version': self.VERSION, 'observation_step': observation_step,
             'original_goal': self.goal, 'plan_revision': self.revision,
             'initial_plan': plan_view(self.initial_plan),
+            'initial_scene_assessment': deepcopy(self.initial_scene_assessment),
             'unfinished_plan': plan_view([s for s in self.active_plan if s['id'] not in completed_ids]),
             'completed_claims': list(self.completed.values()),
             'plan_changes': list(self.revisions),

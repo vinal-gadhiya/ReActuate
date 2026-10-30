@@ -9,8 +9,9 @@ import traceback
 
 import numpy as np
 
-from core.agent import (DECISION_SCHEMA, PLAN_SCHEMA, parse_program, validate_decision,
-                        validate_plan, validate_stage_program)
+from core.agent import (DECISION_SCHEMA, parse_program, validate_decision,
+                        validate_plan, validate_stage_program, validate_placement_destination)
+from core.scene_planning import GROUNDED_PLAN_SCHEMA, validate_grounded_plan
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
 from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
@@ -95,6 +96,25 @@ For other goals, use similarly simple task-relevant actions. Keep original objec
 destination and ordering requirements in target/success_criteria and the whole
 plan; a concise command must not change the intended task.
 
+SCENE FIRST, ORDER SECOND: Before listing steps, fill scene_assessment from ALL
+current camera views. Inventory task-relevant entities with visibility, location,
+access (apparently_reachable/needs_approach/blocked/unknown), camera labels, and
+evidence. Include relevant fixture/access state and each actual destination.
+Unknown is preferable to invented reachability; use wrist AND external evidence,
+not image size alone. Missing detections do not mean absence. Distinguish an
+exposed accessible source from an object requiring travel or uncertain access.
+In ordering_constraints preserve true dependencies and exact original goals.
+In first_action_rationale explain WHY the first selected action is preferable
+from this pose, comparing the access/travel needed for other eligible objects.
+Original-goal noun order is NOT an execution order. Prefer a useful held object,
+then a required exposed target apparently accessible in the current workspace
+over an independent target needing approach. In route_rationale explain how
+subsequent work can be chained at shared destinations to avoid backtracking.
+After placing an object, favor eligible work already nearby, then return for
+remaining fixture work when dependencies permit. Navigation is conditional on
+observed need, not a compulsory stage. This is visual route reasoning, not
+metric planning or a guaranteed optimal route. Never invent unseen objects.
+
 Do NOT automatically add opening/closing because a source is called a cabinet,
 fridge, shelf, or drawer. Add access work only when a relevant obstruction is
 observed or the original goal explicitly requires it. If the object is already
@@ -163,6 +183,15 @@ completion, handoff.readiness must be ready with evidence for the next stage.
 A successful pickup followed by placement is a normal boundary; inspect uncertain
 retention rather than opening the gripper. If there is no next stage use
 not_applicable. Accepted handoffs are dated claims; contradicting evidence matters.
+Before the FIRST motion, review scene_assessment and current access: if a distant
+independent target was ordered ahead of a required target already exposed and
+accessible here, correct the order before wasting a burst. Treat supplied-plan
+surveys as historical, unverified claims. If the policy has already acquired a
+useful object for another pending goal, preserve it and replan to finish its
+required placement; do not insist on another pickup or substitute a temporary
+counter placement for the required receptacle. After a confirmed placement,
+choose eligible work already near that destination before unnecessary travel.
+The active placement destination and original goal remain authoritative.
 When rejection feedback says no motion executed, correct the rejected proposal.
 Stop when no useful supported next action is available; do not repeatedly issue
 an ineffective action merely because supervisor_stop_policy may continue it.'''
@@ -185,7 +214,9 @@ FLEXIBLE_PLAN_PROMPT = '''Reorder independent unfinished subgoals only for a rea
 observed benefit, such as blocked access or preserving an already-held useful
 object. Do not infer that objectives commute: preserve strict order, safety,
 contents and other true dependencies. Never switch goals merely because another
-object is visible or to mask a failed attempt. If a held object contributes to ANY unfinished goal,
+object is visible or to mask a failed attempt. Before first motion, a required
+accessible target versus an independent target needing approach is a real benefit;
+do not let initial noun order override scene evidence. If a held object contributes to ANY unfinished goal,
 finish its applicable placement before starting an independent acquisition.
 
 replacement_steps replaces the entire UNFINISHED suffix. Keep completed steps
@@ -295,18 +326,20 @@ class Supervisor:
             # Keep the established tool schema; only its selected executor changes.
             prompt = prompt.replace('GR00T', 'PatchWAM')
             prompt += '\nrun_groot is the compatibility tool name for calling the selected PatchWAM policy. No GR00T model is used in this run.'
-        schema = PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
+        schema = GROUNDED_PLAN_SCHEMA if operation == 'plan' else DECISION_SCHEMA
         result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
         audit.append(usage)
         validation_error = None
         if operation == 'plan':
-            validate_plan(result)
+            validate_grounded_plan(result, {key for key in images if key.startswith('current:')})
         else:
             try:
                 validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],
                                   context['capabilities'].get('move_vertical', False))
                 if context.get('instruction_style') == 'single_stage' and result['status'] == 'continue':
-                    validate_stage_program(parse_program(result['program'], context['decision_step_limit']))
+                    commands = parse_program(result['program'], context['decision_step_limit'])
+                    validate_stage_program(commands)
+                    validate_placement_destination(commands, context['step']['instruction'])
             except (ValueError, KeyError, SyntaxError, TypeError) as error:
                 # A model proposal is not a malformed HTTP request. Preserve API
                 # usage/audit and let the runner reject without motion, then feed
@@ -338,7 +371,7 @@ def make_handler(supervisor):
                 'atomic_catalog_ref': supervisor.instruction_catalog['upstream_ref'],
                 'atomic_catalog_tasks': len(supervisor.instruction_catalog['tasks']),
                 'agent_features': ['scene_memory', 'guarded_navigation', 'inspection', 'sam_clip_tracking',
-                                   'single_stage_instructions', 'conditional_access'],
+                                   'single_stage_instructions', 'conditional_access', 'scene_grounded_planning'],
             })
 
         def do_POST(self):

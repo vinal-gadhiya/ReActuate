@@ -10,7 +10,9 @@ import uuid
 
 import numpy as np
 
-from core.agent import parse_program, validate_decision, validate_plan, validate_stage_program
+from core.agent import (parse_program, validate_decision, validate_stage_program,
+                        validate_placement_destination)
+from core.scene_planning import inventory_updates, load_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
@@ -340,6 +342,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         try:
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
+                validate_placement_destination(commands, step['instruction'])
             if transport is not None:
                 transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
@@ -472,10 +475,10 @@ def main():
         parser.error('baseline mode always uses the original task instruction')
     if args.plan_only and args.mode != 'agent':
         parser.error('--plan-only requires agent mode')
-    starting_plan = None
+    starting_plan, starting_scene_assessment = None, None
     operator_context = load_operator_context(args.context_file)
     if args.plan:
-        starting_plan = validate_plan(json.loads(args.plan.read_text()))
+        starting_plan, starting_scene_assessment = load_plan(json.loads(args.plan.read_text()))
 
     ensure_hash_seed(args.seed)
     seed_process(args.seed)
@@ -560,6 +563,8 @@ def main():
                 record({'event': 'scene_verified', **verify_scene(scene, reference_scene)})
             api_calls, request_number = 0, 0
             previous_images = None
+            initial_scene_assessment = None
+            scene_assessment_source = None
 
             def ask(operation, context):
                 nonlocal api_calls, request_number, previous_images
@@ -593,6 +598,8 @@ def main():
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
+                    'scene_assessment': initial_scene_assessment,
+                    'scene_assessment_source': scene_assessment_source,
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
                     'clip_steps': clip_steps,
@@ -683,10 +690,26 @@ def main():
                              'success_criteria': 'Complete the original task', 'max_steps': max_steps}]
                 elif starting_plan is not None:
                     plan = [dict(step) for step in starting_plan]
+                    initial_scene_assessment = starting_scene_assessment
+                    scene_assessment_source = 'saved_plan_unverified' if initial_scene_assessment else None
                 else:
-                    plan = validate_plan(ask('plan', {'episode_horizon': max_steps}))
-                record({'event': 'initial_plan', 'goal': goal, 'steps': plan})
-                (directory / 'plan.json').write_text(json.dumps({'steps': plan}, indent=2) + '\n')
+                    generated = ask('plan', {'episode_horizon': max_steps})
+                    plan, initial_scene_assessment = load_plan(generated)
+                    scene_assessment_source = 'current_plan_visual_claim'
+                    entries = inventory_updates(initial_scene_assessment)
+                    for offset in range(0, len(entries), 12):
+                        memory.update_entries(entries[offset:offset + 12], tools.steps, request_number - 1)
+                    record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
+                record({'event': 'initial_plan', 'goal': goal, 'steps': plan,
+                        'scene_assessment': initial_scene_assessment,
+                        'scene_assessment_source': scene_assessment_source})
+                saved_plan = {'steps': plan}
+                if initial_scene_assessment is not None:
+                    saved_plan['scene_assessment'] = initial_scene_assessment
+                    (directory / 'scene_assessment.json').write_text(json.dumps({
+                        'source': scene_assessment_source, 'observation_step': tools.steps,
+                        'scene_assessment': initial_scene_assessment}, indent=2) + '\n')
+                (directory / 'plan.json').write_text(json.dumps(saved_plan, indent=2) + '\n')
 
                 def decide(active_plan, index, spent, limit):
                     return ask('decide', {

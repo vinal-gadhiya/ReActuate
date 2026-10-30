@@ -152,6 +152,29 @@ def validate_stage_program(commands):
         raise ValueError('Separate pickup, placement, navigation and other actions into distinct stages with observations between them')
 
 
+def validate_placement_destination(commands, planned_instruction):
+    """Preserve an explicitly planned support/receptacle during execution."""
+    pattern = r'\b(?:place|put)\s+.+?\s+(on|onto|in|into|inside|under|over|beside)\s+(.+?)\s*[.!?]?$'
+    expected = re.search(pattern, planned_instruction, re.IGNORECASE)
+    if expected is None:
+        return
+
+    def destination(match):
+        relation = {'onto': 'on', 'into': 'in', 'inside': 'in'}.get(match[1].casefold(), match[1].casefold())
+        name = re.sub(r'^(?:the|a|an)\s+', '', match[2].strip().rstrip('.!?').casefold())
+        return relation, ' '.join(name.split())
+
+    expected_relation, expected_name = destination(expected)
+    for name, arguments in commands:
+        actual = re.search(pattern, arguments['instruction'], re.IGNORECASE) if name == 'run_groot' else None
+        if actual is None:
+            continue
+        relation, actual_name = destination(actual)
+        if relation != expected_relation or not (actual_name == expected_name or actual_name.endswith(' ' + expected_name)):
+            raise ValueError('Placement destination differs from the active goal. Preserve its support/receptacle; '
+                             'do not substitute a nearby surface. Replan explicitly if the goal needs repair.')
+
+
 def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertical=False):
     if not isinstance(decision, dict) or set(decision) != set(DECISION_SCHEMA['properties']):
         raise ValueError('Invalid decision fields')
