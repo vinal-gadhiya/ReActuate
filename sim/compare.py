@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -50,6 +51,8 @@ def run_command(args, condition, seed, output, plan=None):
     if plan is not None:
         command += ['--plan', str(plan)]
     if condition != 'baseline':
+        if getattr(args, 'depth', False):
+            command += ['--depth', '--depth-max-metres', str(getattr(args, 'depth_max_metres', 3.0))]
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
         command += ['--planning-context', getattr(args, 'planning_context', 'summary')]
         command += ['--supervisor-stop-policy', getattr(args, 'supervisor_stop_policy', 'halt')]
@@ -158,6 +161,8 @@ def main():
                         help='Simulator only: honor Muse stop, or continue short guarded policy bursts within remaining budgets')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
+    parser.add_argument('--depth', action='store_true', help='Give Muse aligned depth views in supervised conditions only')
+    parser.add_argument('--depth-max-metres', type=float, default=3.0)
     parser.add_argument('--require-unseen-composite', action='store_true')
     parser.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS),
                         help='Ordered conditions; baseline must be first, muse precedes muse_sam')
@@ -167,6 +172,8 @@ def main():
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if not math.isfinite(args.depth_max_metres) or args.depth_max_metres <= 0:
+        parser.error('--depth-max-metres must be finite and positive')
     if args.max_supervisor_failures < 0:
         parser.error('--max-supervisor-failures must be nonnegative')
     if args.max_stop_continuations < 0:

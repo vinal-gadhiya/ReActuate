@@ -18,6 +18,7 @@ from core.simulator_context import build_simulator_context, load_operator_contex
 from core.scene_memory import SceneMemory
 from core.episode_context import EpisodeContext
 from core.observations import check_rgb
+from core.depth import supervisor_depth_views
 from core.transport_control import ACTION_SHAPES, TransportControl
 from sim.evaluate import make_policy_observation, validate_actions
 from sim.scene_checks import choose_layout_style, ensure_hash_seed, reset_scene, scene_fingerprint, seed_process, verify_scene
@@ -313,16 +314,6 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 tools.refresh_observation()
             continue
         if status == 'complete':
-            if mode == 'agent' and index + 1 == len(plan) and not tools.success:
-                record({'event': 'final_completion_blocked', 'subtask': step['id'], 'step': tools.steps,
-                        'simulator_success': False,
-                        'reason': 'The simulator has not accepted task completion. Reassess placement, '
-                                  'release, gripper withdrawal, and every original goal; continue or replan. '
-                                  'A visual completion claim cannot end the episode successfully.',
-                        'completion_evidence': decision['evidence']})
-                if remaining <= 0:
-                    return 'subtask_step_budget'
-                continue
             if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
                 record({'event': 'transition_blocked', 'subtask': step['id'],
                         'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
@@ -462,6 +453,8 @@ def main():
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clip tracking; default uses images only')
+    parser.add_argument('--depth', action='store_true', help='Agent only: send aligned depth visualizations to Muse, never to the policy')
+    parser.add_argument('--depth-max-metres', type=float, default=3.0, help='Fixed depth visualization range in metres (default: 3)')
     parser.add_argument('--reference-scene', type=Path, help='Require matching baseline scene before executing actions')
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
@@ -487,6 +480,10 @@ def main():
         parser.error('baseline mode always uses the original task instruction')
     if args.plan_only and args.mode != 'agent':
         parser.error('--plan-only requires agent mode')
+    if args.depth and args.mode != 'agent':
+        parser.error('--depth requires agent mode')
+    if not np.isfinite(args.depth_max_metres) or args.depth_max_metres <= 0:
+        parser.error('--depth-max-metres must be finite and positive')
     starting_plan, starting_scene_assessment = None, None
     operator_context = load_operator_context(args.context_file)
     if args.plan:
@@ -563,6 +560,7 @@ def main():
                 f'robocasa/{args.task}', robots='PandaOmron', split=None, seed=args.seed + episode,
                 obj_instance_split=args.split, layout_and_style_ids=[pair],
                 camera_widths=metadata['camera_width'], camera_heights=metadata['camera_height'],
+                **({'camera_depths': True} if args.depth else {}),
             )
             reference_scene = json.loads(args.reference_scene.read_text()) if args.reference_scene else None
             observation, _ = reset_scene(env, args.seed + episode, reference_scene)
@@ -576,17 +574,35 @@ def main():
                 record({'event': 'scene_verified', **verify_scene(scene, reference_scene)})
             api_calls, request_number = 0, 0
             previous_images = None
+            previous_depth_images = None
+            previous_observation_step = None
             initial_scene_assessment = None
             scene_assessment_source = None
 
             def ask(operation, context):
-                nonlocal api_calls, request_number, previous_images
+                nonlocal api_calls, request_number, previous_images, previous_depth_images, previous_observation_step
                 if api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
                 images = dict(current)
                 if previous_images is not None and operation == 'decide':
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
+                depth_context = {'enabled': False}
+                current_depth = None
+                if args.depth:
+                    sim = env.unwrapped.env.sim
+                    extent = float(sim.model.stat.extent)
+                    near = float(sim.model.vis.map.znear) * extent
+                    far = float(sim.model.vis.map.zfar) * extent
+                    current_depth, depth_metres, depth_context = supervisor_depth_views(
+                        tools.observation, camera_keys, near, far, args.depth_max_metres)
+                    images.update(current_depth)
+                    if previous_depth_images is not None and operation == 'decide':
+                        images.update({key.replace('current_depth:', 'before_depth:', 1): frame
+                                       for key, frame in previous_depth_images.items()})
+                    depth_context.update(observation_step=tools.steps,
+                                         before_observation_step=previous_observation_step if operation == 'decide' else None)
+                    np.savez_compressed(directory / f'depth-{request_number:03d}.npz', **depth_metres)
                 clip_steps, clips = tools.perception_clip()
                 # Clips are supplied only when SAM is enabled, not to the policy.
                 if args.sam_video and (args.sam is True or (args.sam is None and supervisor_metadata['sam_enabled'])):
@@ -596,7 +612,8 @@ def main():
                 for number, (label, frame) in enumerate(sorted(images.items())):
                     if label.startswith('clip:'):
                         continue
-                    filename = f'observation-{request_number:03d}-{number}.jpg'
+                    extension = 'png' if label.startswith(('current_depth:', 'before_depth:')) else 'jpg'
+                    filename = f'observation-{request_number:03d}-{number}.{extension}'
                     imageio.imwrite(directory / filename, frame)
                     references.append({'label': label, 'path': filename})
                 if any(key.startswith('clip:') for key in images):
@@ -609,12 +626,7 @@ def main():
                 motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
                 context.update({
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
-                    'simulator_success': bool(tools.success),
-                    'simulator_success_observation_step': tools.steps,
-                    'final_completion_feedback': next((
-                        {key: event[key] for key in ('step', 'subtask', 'reason')}
-                        for event in reversed(history) if event['event'] == 'final_completion_blocked'
-                    ), None),
+                    'depth_observations': depth_context,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
                     'scene_assessment': initial_scene_assessment,
@@ -678,12 +690,16 @@ def main():
                             'wall_seconds': time.monotonic() - request_started,
                             'api_calls': error.api_calls, 'audit': error.audit, 'usage_unknown': True})
                     previous_images = current
+                    previous_depth_images = current_depth
+                    previous_observation_step = tools.steps
                     request_number += 1
                     raise
                 api_calls += response['api_calls']
                 record({'event': 'supervisor_response', 'request': request_number,
                         'wall_seconds': time.monotonic() - request_started, **response})
                 previous_images = current
+                previous_depth_images = current_depth
+                previous_observation_step = tools.steps
                 request_number += 1
                 if operation == 'plan' and response.get('validation_error'):
                     record({'event': 'invalid_plan', 'step': tools.steps,
@@ -763,6 +779,7 @@ def main():
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
                     'hybrid_control': False,
+                    'supervisor_depth': args.depth,
                     'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,

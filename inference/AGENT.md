@@ -48,8 +48,7 @@ and navigation. The episode's `original_goal` remains authoritative when its
 wording differs from the documentation template.
 
 The model does not receive a complete simulator object inventory, hidden object
-poses, or individual live task predicate results. It receives public task success
-requirements where catalogued and the overall simulator success flag. Objects named by the task can be hidden; objects seen
+poses, or task predicates. Objects named by the task can be hidden; objects seen
 in images can be distractors. Prompts require the model to distinguish these
 sources of evidence rather than inventing locations or treating occlusion as
 absence. This reduces unsupported plans but does not guarantee feasibility.
@@ -440,16 +439,17 @@ If more information is needed, Muse can:
   acquisition to the destination when appropriate, rather than fixating on the
   original subtask target. Cameras can be queried across successive decisions.
 - Use `navigate(fixture="sink", steps=30)` to request a bounded GR00T navigation
-  burst. The target must have visual memory evidence OR be an exact fixture name
-  in the original task, name a supported fixture, and have an explicit information need. No geometric
+  burst. The target must name a supported fixture; visual memory, original-task
+  mention, and an explicit missing-information entry are not prerequisites. No geometric
   planner is added. The current manipulation remains pending; successful
   navigation cannot satisfy its completion criteria.
 
 Navigation allows six bursts per episode by default (`--max-navigation-bursts`).
-It targets observed/remembered or task-named fixtures rather than arbitrary
-coordinates or unseen objects. An unseen task-named fixture remains unverified;
-navigation trace events record `original_task_description` rather than
-`visual_memory` as their source. During destination search, common named counter/
+The policy resolves named-fixture navigation even when Muse has never seen or
+localized that destination. Requests do not create fake visible memory entries
+or certify arrival. Trace source is `visual_memory`, `original_task_description`,
+or `policy_navigation_request`, depending on the available evidence. Arbitrary
+coordinates and object targets remain outside this tool. During destination search, common named counter/
 table roles from the task cannot be reduced to generic `counter`/`table` targets.
 Muse must assess motion, target reacquisition, and retention of
 any possibly held object after each burst. Destination search should not cause
@@ -669,21 +669,35 @@ Each episode directory contains:
 Top-level `config.json` and `summary.json` record configuration and results.
 Only the simulator's original task check can report full-task success. Finishing
 the plan or a positive Muse verdict cannot mark a failed episode successful.
-In agent mode, a final `complete` proposal while simulator success is false emits
-`final_completion_blocked` and keeps the current stage active. Muse receives the
-overall `simulator_success` flag and dated `final_completion_feedback` on subsequent
-requests, including with recent-only planning context. It can continue policy
-execution or replan; no automatic withdrawal or extra settling actions are injected.
-Simulator success ends execution immediately. Existing step, decision, API, stop,
-and failure limits still bound unsuccessful runs.
+Muse may finish the plan on visual evidence even when the environment score is
+false; the runner reports `plan_exhausted_without_task_success` in that case. It
+does not send simulator success requirements, live predicate results, or the
+overall success flag to Muse, and does not force continued placement after a
+final visual completion claim.
 
-Public task requirements are supplied in `simulator_context.task.success_requirements`.
-Currently GarnishPancake has verified rules from the pinned RoboCasa source,
-including required contacts, centering, and gripper distance greater than 25 cm.
-Other tasks explicitly report uncatalogued requirements and use the same authoritative
-success gate. Individual predicate results and hidden object poses are not sent to Muse.
-Privileged object state and live individual predicate results are not passed to Muse.
-Success feedback and requirements are supervisor context, not additional policy inputs.
+### Optional depth for Muse
+
+Add `--depth` to `sim.run_agent --mode agent` to render and send camera-aligned
+depth views alongside the three current RGB views and their previous-request
+counterparts. Depth is off by default. The same depth scale is used across all
+views and requests: white is zero metres, black is 3 metres or farther, and
+magenta is invalid. Set `--depth-max-metres` to change the fixed display range.
+Raw MuJoCo depth is converted using the scene's actual near/far clipping planes;
+the wrapper has already applied the same vertical flip to RGB and depth.
+
+Depth is sent only to Muse. SAM still receives RGB; policy observations and
+motor actions are unchanged. Depth measures the first visible surface along
+the camera optical axis, not Euclidean distance to the gripper or a contact label.
+Muse uses temporal RGB/depth to assess shelf separation and retention; this
+cannot guarantee correct identity, grasp, contact, or release and never triggers
+an automatic gripper action. Depth adds image tokens to the existing request,
+not another model call. Initial planning receives depth too.
+
+`depth-NNN.npz` stores unclipped metric depth arrays for each request; depth
+visualizations use lossless `observation-*.png` artifacts. `trace.jsonl` records
+the labels, calibration, fixed scale, and before/current observation steps.
+Baseline runs do not accept `--depth`, keeping policy inputs unchanged. In
+`sim.compare`, `--depth` forwards depth only to the supervised conditions.
 
 API calls, decisions, replans, per-subtask steps, per-program steps, and total
 episode steps are bounded independently in `--subtask-budget-mode plan` (the

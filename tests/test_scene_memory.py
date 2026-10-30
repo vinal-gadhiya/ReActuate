@@ -29,16 +29,16 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(len(memory.assessments), 2)
         self.assertEqual(SceneMemory().context()['entries'], [])
 
-    def test_navigation_requires_observed_fixture_information_need_and_budget(self):
+    def test_navigation_does_not_require_visual_memory_or_information_need(self):
         memory = SceneMemory()
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('sink', 2)
+        memory.authorize_navigation('sink', 2)
+        self.assertEqual(memory.navigation_source('sink'), 'policy_navigation_request')
+        self.assertEqual(memory.context()['entries'], [])
         update = decision()
         update['memory_updates'] = [{'name': 'sink', 'kind': 'fixture', 'location': 'left view',
                                     'status': 'visible', 'evidence': 'Basin and faucet visible.'}]
         memory.update(update, 20, 1)
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('sink', 2)
+        memory.authorize_navigation('sink', 2)
         update['assessment']['information_needed'] = 'Find the destination glass.'
         memory.update(update, 20, 2)
         memory.authorize_navigation('sink', 2)
@@ -47,6 +47,9 @@ class SceneMemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             memory.authorize_navigation('glass', 2)
         self.assertEqual(parse_program('navigate(fixture="sink", steps=4)')[0][0], 'navigate')
+        memory.last_navigation, memory.stall_streak = 'sink', 2
+        with self.assertRaisesRegex(ValueError, 'stalled'):
+            memory.authorize_navigation('sink', 2)
 
     def test_fixture_can_be_revisited_after_leaving_current_view(self):
         memory = SceneMemory()

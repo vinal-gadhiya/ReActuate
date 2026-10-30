@@ -124,8 +124,9 @@ agent execution rejects left/right/one-door steering variants. Opening completio
 guidance requires all relevant panels open and enough space for approach and
 withdrawal, not merely an interior glimpse. This remains a visual judgment.
 
-Navigation may target an exact fixture named by the original task even before
-it is seen, with task-description provenance rather than invented visual evidence.
+Navigation may target a named fixture without Muse having seen it, recorded it
+in memory, or found it in the original task. The policy resolves the route;
+the trace records request provenance without inventing visual evidence.
 Names such as `dining counter` must stay specific during destination search.
 If Muse reports `locate_destination`, placement commands are rejected until it
 reports the destination localized; navigation or inspection must address that gap.

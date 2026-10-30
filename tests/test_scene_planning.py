@@ -205,11 +205,10 @@ class ScenePlanningTests(unittest.TestCase):
         for item in plan:
             proposals.extend([decision(program=f'run_groot(instruction={item["instruction"]!r}, steps=4)'),
                               decision('complete', '')])
-        proposals.append(decision('stop', ''))
         replies = iter(proposals)
         reason = run_subtasks(tools, plan, 'agent', lambda *args: next(replies), events.append,
                               concise_instructions=True)
-        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(reason, 'plan_exhausted_without_task_success')
         self.assertEqual(tools.instructions, [item['instruction'] for item in plan])
         placements = [e for e in events if e['event'] == 'subtask_transition']
         self.assertEqual(placements[1]['completed_step']['instruction'], 'Place the mug on the tray.')

@@ -46,7 +46,7 @@ class StagedInstructionTests(unittest.TestCase):
         placing['assessment'].update(phase='place', held_object='cup', grasp='supported')
         placed = decision('complete', '')
         placed['assessment'].update(phase='place', held_object='', grasp='empty')
-        replies = iter([pickup, acquired, placing, placed, decision('stop', '')])
+        replies = iter([pickup, acquired, placing, placed])
 
         def decide(*args):
             observed.append(tools.steps)
@@ -54,10 +54,9 @@ class StagedInstructionTests(unittest.TestCase):
 
         run_subtasks(tools, [step('pick', 'Pick up the cup.'), step('place', 'Place the cup on the table.')],
                      'agent', decide, events.append, concise_instructions=True)
-        self.assertEqual(observed, [0, 4, 4, 8, 8])
+        self.assertEqual(observed, [0, 4, 4, 8])
         self.assertEqual(tools.instructions, ['Pick up the cup.', 'Place the cup on the table.'])
-        self.assertEqual([e['subtask'] for e in events if e['event'] == 'subtask_transition'], ['pick'])
-        self.assertEqual(len([e for e in events if e['event'] == 'final_completion_blocked']), 1)
+        self.assertEqual([e['subtask'] for e in events if e['event'] == 'subtask_transition'], ['pick', 'place'])
 
     def test_rejected_combined_command_does_not_execute(self):
         tools, events = FakeTools(), []
@@ -83,7 +82,7 @@ class StagedInstructionTests(unittest.TestCase):
         self.assertEqual(len(tools.instructions), 3)
         self.assertEqual(events[-1]['event'], 'supervisor_stop_retry_limit')
 
-    def test_counter_and_cabinet_navigation_require_observed_fixture_evidence(self):
+    def test_named_fixture_navigation_allows_unknown_locations_but_not_object_targets(self):
         memory = SceneMemory()
         proposal = decision()
         proposal['assessment']['information_needed'] = 'Approach the target fixture.'
@@ -94,8 +93,8 @@ class StagedInstructionTests(unittest.TestCase):
         memory.update(proposal, 0, 1)
         for name in ('counter', 'cabinet'):
             memory.authorize_navigation(name, 6)
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('table', 6)
+        memory.authorize_navigation('table', 6)
+        self.assertEqual(memory.navigation_source('table'), 'policy_navigation_request')
         with self.assertRaises(ValueError):
             memory.authorize_navigation('cup', 6)
 
@@ -121,12 +120,25 @@ class StagedInstructionTests(unittest.TestCase):
         self.assertEqual(memory.context()['entries'][0]['status'], 'uncertain')
         with self.assertRaisesRegex(ValueError, 'task-specific destination'):
             memory.authorize_navigation('counter', 6)
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('breakfast table', 6)
+        memory.authorize_navigation('breakfast table', 6)
+        self.assertEqual(memory.navigation_source('breakfast table'), 'policy_navigation_request')
         with self.assertRaises(ValueError):
             memory.authorize_navigation('pastry', 6)
         with self.assertRaises(ValueError):
             memory.authorize_navigation('dining counter', 0)
+
+    def test_runner_executes_unseen_fixture_navigation_without_memory_or_task_mention(self):
+        memory, tools, events = SceneMemory(), FakeTools(), []
+        proposal = decision(program='navigate(fixture="dining counter", steps=4)')
+        replies = iter([proposal, decision('stop', '')])
+        run_subtasks(tools, [step('travel', 'Navigate to the dining counter.')], 'agent',
+                     lambda *args: next(replies), events.append, scene_memory=memory,
+                     concise_instructions=True)
+        self.assertEqual(tools.instructions, ['Navigate to the dining counter.'])
+        self.assertEqual(tools.steps, 4)
+        self.assertEqual(memory.context()['entries'], [])
+        executed = next(e for e in events if e['event'] == 'tool')
+        self.assertEqual(executed['navigation_source'], 'policy_navigation_request')
 
     def test_unlocalized_destination_requires_navigation_before_placement(self):
         memory = SceneMemory('Place fruit on pastry at the dining counter.')

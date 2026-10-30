@@ -73,6 +73,16 @@ class CompareTests(unittest.TestCase):
         args.max_stop_continuations = 0
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         self.assertEqual(muse[muse.index('--max-stop-continuations') + 1], '0')
+        self.assertNotIn('--depth', muse)
+        args.depth, args.depth_max_metres = True, 2.5
+        baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
+        muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
+        sam = run_command(args, 'muse_sam', 3, Path('/outputs/sam'))
+        self.assertNotIn('--depth', baseline)
+        self.assertNotIn('--depth-max-metres', baseline)
+        for command in (muse, sam):
+            self.assertIn('--depth', command)
+            self.assertEqual(command[command.index('--depth-max-metres') + 1], '2.5')
 
     def test_two_condition_report_includes_paired_result(self):
         row = {'condition': 'baseline', 'status': 'completed', 'seed': 0, 'success': False,

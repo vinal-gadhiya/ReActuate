@@ -4,34 +4,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-CONTEXT_VERSION = 4
-
-
-def task_success_requirements(task):
-    """Public task rules, never live predicate values or hidden object state."""
-    result = {
-        'authority': 'Only simulator_success=true establishes full-task success. Final Muse completion '
-                     'claims are rejected while it is false; continue or replan within execution budgets.',
-        'coverage': 'Task-specific requirements have not been catalogued for this task; '
-                    'do not assume another task uses the same thresholds.',
-    }
-    if task == 'GarnishPancake':
-        result.update({
-            'coverage': 'Verified public success requirements for GarnishPancake.',
-            'upstream_ref': '4f8a2980def75a55dff96b990745b83540425f09',
-            'sources': ['robocasa/environments/kitchen/composite/garnishing_dishes/garnish_pancake.py',
-                        'robocasa/utils/object_utils.py'],
-            'requirements': [
-                'The task strawberry must contact the pancake, with their horizontal centers separated '
-                'by less than 0.7 times the pancake horizontal radius.',
-                'The pancake must contact its original plate, with their horizontal centers separated '
-                'by less than 0.7 times the plate horizontal radius.',
-                'That plate must contact the designated dining counter.',
-                'The right gripper end-effector site must be more than 0.25 metres from the strawberry '
-                '(3D Euclidean distance). Release alone does not satisfy this requirement.',
-            ],
-        })
-    return result
+CONTEXT_VERSION = 5
 
 
 def load_atomic_task_catalog(registered_tasks=()):
@@ -99,8 +72,8 @@ SIMULATOR_GUIDE = {
     'observation_rules': [
         'RGB images are partial views, not a complete scene inventory.',
         'Proprioception describes the robot, not ground-truth object locations or contacts.',
-        'No object depth, object poses, contact labels, or live individual success-predicate values are supplied. '
-        'Public success requirements and the overall simulator success flag are supplied.',
+        'No hidden object poses, contact labels, or task-success predicates are supplied. '
+        'Optional depth views measure visible surfaces only; their scale is described in depth_observations.',
         'A task-mentioned object may be occluded or inside a container; not visible does not mean absent.',
         'A visible object may be a distractor. Match task attributes and relations before selecting it.',
         'SAM candidates are perception estimates, not proof of identity, contact, or containment.',
@@ -111,7 +84,7 @@ SIMULATOR_GUIDE = {
         'Independent unfinished goals may be reordered to use a visible or already-held required object. Preserve true dependencies, completed work, and every remaining goal.',
         'Only listed tools exist. navigate wraps a fallible GR00T language request; no navigation planner, move_eef, IK solver, or manual pick/place primitive is installed. Separate pickup and placement language requests use run_groot.',
         'A run_groot instruction is a request to a fallible policy, not a guaranteed skill.',
-        'An exact fixture named by the original task may be a navigation goal before it is visible; task-description evidence must remain distinct from visual confirmation or verified arrival.',
+        'Named fixture navigation does not require visual localization, a memory entry, or an original-task mention. The policy resolves the route; a request is not visual confirmation or verified arrival.',
         'Do not invent tools or interactions. Stop or replan if prerequisites cannot be observed or executed.',
         'Avoid task-irrelevant cleanup. Release placed objects and move clear when needed to establish completion.',
         'Use observable stopping conditions: lift-and-move evidence is stronger than gripper closure alone.',
@@ -153,7 +126,6 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
         'version': CONTEXT_VERSION, 'guide': guide,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
                  'composite_reference': composite_task_reference(task, composite_tasks) if is_composite else None,
-                 'success_requirements': task_success_requirements(task),
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {
             'registered_atomic_task_names': atomic_tasks,
@@ -179,7 +151,7 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
             'run_groot': {'available': True, 'arguments': 'instruction: str, steps: positive int',
                           'meaning': 'A short policy burst in the current scene'},
             'navigate': {'available': True, 'arguments': 'fixture: str, steps: positive int',
-                         'meaning': 'Guarded NavigateKitchen instruction to an evidence-backed fixture; not a geometric planner'},
+                         'meaning': 'Bounded NavigateKitchen request to a named fixture, including unseen destinations; the policy resolves navigation'},
             'set_gripper': {'available': bool(allow_gripper), 'arguments': 'closed: bool, steps: int in [1,10]',
                             'meaning': 'Gripper command with zero commanded arm/base delta; not a grasp skill'},
         },

@@ -7,7 +7,7 @@ import unittest
 
 from core.simulator_context import (build_simulator_context, load_atomic_task_catalog,
                                     load_composite_task_catalog, composite_task_reference,
-                                    load_operator_context, task_success_requirements)
+                                    load_operator_context)
 
 
 class SimulatorContextTests(unittest.TestCase):
@@ -36,6 +36,7 @@ class SimulatorContextTests(unittest.TestCase):
         context = build_simulator_context('GarnishPancake', True, metadata, [], False, {},
                                           composite_tasks=['GarnishPancake', 'ArrangeTea'])
         reference = context['task']['composite_reference']
+        self.assertNotIn('success_requirements', context['task'])
         self.assertEqual(reference['name'], 'GarnishPancake')
         self.assertIn('dining counter', reference['description'])
         self.assertEqual(reference['skills_required'], ['Navigation', 'Open Door', 'Pick & Place'])
@@ -48,15 +49,6 @@ class SimulatorContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'does not cover registered tasks'):
             build_simulator_context('GarnishPancake', True, metadata, [], False, {},
                                     composite_tasks=['UndocumentedComposite'])
-
-    def test_success_rules_are_public_task_specific_and_fresh_per_request(self):
-        rules = task_success_requirements('GarnishPancake')
-        self.assertEqual(len(rules['requirements']), 4)
-        self.assertIn('0.25 metres', rules['requirements'][-1])
-        self.assertEqual(rules['upstream_ref'], '4f8a2980def75a55dff96b990745b83540425f09')
-        self.assertNotIn('requirements', task_success_requirements('OtherTask'))
-        rules['requirements'].clear()
-        self.assertEqual(len(task_success_requirements('GarnishPancake')['requirements']), 4)
 
     def test_context_separates_capabilities_from_reference_tasks(self):
         metadata = {'camera_width': 256, 'camera_height': 256, 'modalities': {

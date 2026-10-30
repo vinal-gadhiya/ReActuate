@@ -139,8 +139,8 @@ class SceneMemory:
                 'recent_assessments': deepcopy(self.assessments), 'next_perception': deepcopy(self.perception),
                 'navigation_bursts': self.navigation_bursts, 'last_navigation': self.last_navigation,
                 'stationary_bursts': self.stall_streak,
-                'navigation_rule': 'An exact task-named fixture may be approached before it is visible. '
-                                   'This is task-description evidence, not a verified visual location. '
+                'navigation_rule': 'Named fixtures may be approached without visual memory or a task-description mention. '
+                                   'The policy resolves navigation; an unseen destination is not a verified location. '
                                    'Preserve names such as dining counter; a generic counter is not equivalent.',
                 'interpretation': 'Time-stamped visual/model claims, not simulator truth. Reobserve moved, held, '
                                   'occluded, or stale objects. A historical box is not a current 3D location. '
@@ -159,14 +159,8 @@ class SceneMemory:
             if named:
                 raise ValueError(f'Preserve the task-specific destination fixture name {sorted(set(named))}; '
                                  f'a generic {generic} may be a different location')
-        record = self.entries.get(('fixture', fixture.casefold().strip()))
-        observed = record is not None and record.get('last_seen_step') is not None
-        task_named = self.task_names_fixture(fixture)
-        if not observed and not task_named:
-            raise ValueError('Navigation requires a fixture with current or preserved historical visual evidence, '
-                             'or an exact fixture name in the original task description')
-        if not self.assessment or not self.assessment['information_needed'].strip():
-            raise ValueError('Navigation requires an explicit information need')
+        # The policy, not the supervisor's inventory, resolves where to go.
+        # Unknown location and absent memory are not authorization failures.
         if self.navigation_bursts >= limit:
             raise ValueError('Navigation burst budget exhausted')
         if self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
@@ -181,14 +175,14 @@ class SceneMemory:
         record = self.entries.get(('fixture', fixture.casefold().strip()))
         if record is not None and record.get('last_seen_step') is not None:
             return 'visual_memory'
-        return 'original_task_description' if self.task_names_fixture(fixture) else 'unconfirmed'
+        return 'original_task_description' if self.task_names_fixture(fixture) else 'policy_navigation_request'
 
     def authorize_placement_stage(self, commands):
         if not self.assessment or self.assessment['phase'] != 'locate_destination':
             return
         if any(name == 'run_groot' and re.match(r'^\s*(?:place|put)\b', args['instruction'], re.IGNORECASE)
                for name, args in commands):
-            raise ValueError('Destination is still unlocalized: navigate to its task-named fixture or inspect '
+            raise ValueError('Destination is still unlocalized: navigate to its named fixture or inspect '
                              'before placement. Do not use a placement command as an object-search action.')
 
     def note_motion(self, instruction, diagnostics):
