@@ -174,14 +174,14 @@ class SceneMemory:
                                   'Compare appearance and fixture-relative locations before replacing a referent; '
                                   'a changed location may reflect viewpoint, wording, motion, or misidentification.'}
 
-    def authorize_navigation(self, fixture, limit):
+    def authorize_navigation(self, fixture, limit, enforce_stall=True):
         if not isinstance(fixture, str) or not fixture.strip() or len(fixture) > 120:
             raise ValueError('Navigation requires a named destination')
         # The policy, not the supervisor's inventory, resolves where to go.
         # Unknown location and absent memory are not authorization failures.
         if limit is not None and self.navigation_bursts >= limit:
             raise ValueError('Navigation burst budget exhausted')
-        if self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
+        if enforce_stall and self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
             raise ValueError('Repeated navigation to the same fixture is stalled')
 
     def task_names_fixture(self, fixture):

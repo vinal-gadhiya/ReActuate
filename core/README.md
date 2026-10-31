@@ -15,6 +15,11 @@ literal-call command language. `SupervisorClient` exchanges visual observations
 and agent context with the Meta supervisor. No generated code receives the raw
 simulator object or a general-purpose Python execution capability.
 
+`execution.py` validates evidence-backed interruptions of an active stage. The
+CLI's episode execution policy keeps physical and supervision budgets separate:
+short retry limits do not terminate a valid unfinished stage. Completion and
+necessary interventions remain dated model claims, not simulator truth.
+
 `atomic_language.py` validates agent policy instructions against the versioned
 atomic descriptions and the catalog's explicitly labelled derived instruction
 forms. It accepts instantiated documentation placeholders and split transfer

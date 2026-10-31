@@ -62,6 +62,10 @@ verbatim. Prefer concise wording, but include appearance or relations if needed.
 Examples: Pick up the mug. Navigate to the dining counter. Place the mug on the tray.
 Use run_groot(instruction="...", steps=32); run_groot names the selected backend,
 not necessarily GR00T. navigate(fixture="...", steps=32) is a compatibility alias.
+FIELD CONTRACT: continue has exactly one executable call and replacement_steps=[].
+replan has program="", action=null and replacement_steps containing the new window;
+it executes no motion. complete, inspect and stop have program="", action=null,
+replacement_steps=[]. Never put the first action of a new plan in a replan program.
 ATOMIC LANGUAGE CONTRACT: For every initial stage, replacement stage and executable
 command, use the vocabulary and sentence format in atomic_instruction_forms or
 a supplied atomic task description. Fill slots with actual scene entity names.
@@ -99,6 +103,27 @@ changed prerequisite after a subsequent executed action. Setting an object down
 and repeating the failed request does not reset attempts. Do not repeat a blocked
 command with a reworded explanation. Use recovery feedback or stop if no useful
 bounded alternative exists. New evidence may remain uncertain.
+
+When execution_policy is episode, physical execution continues until simulator
+success/end or episode step exhaustion (real execution errors still fail). API
+and decision budgets limit supervision, not the physical execution budget. Model
+stop, invalid decisions, and short failure/recovery limits do not end execution:
+the runner continues the committed active stage in bounded feedback bursts.
+max_steps on a planned stage is advisory in this mode. A burst of 32 control steps
+is an observation interval, not a complete skill attempt or a reason to change goals.
+Do not abandon an unfinished stage because a few bursts show no progress.
+The declared active-stage instruction stays committed until verified complete.
+A different executable instruction, or a replan interrupting executed work, needs
+recovery.necessity identifying a currently observed blocked_access, wrong_target,
+object_loss, unsafe_state, goal_contradiction, or useful_required_object_held.
+Use not_needed only when no intervention is necessary. Mere lack of movement,
+elapsed steps, a different tool alias, or an explanation about resetting pose is
+not evidence that a switch is necessary. Cite current observations of the actual
+blocking condition. Once a necessary temporary intervention is finished, resume
+the pending stage or explicitly replan to retain it. Otherwise keep its instruction.
+Complete requires current evidence, not old before views alone. Attempt reports
+may cite both before and after frames, but need at least one after-action frame.
+Repeated evidence paraphrases for the SAME outcome do not count as more failures.
 
 Complete a stage only with supported satisfied evidence and ready handoff when
 another stage follows. Replan changes only the next action window; it cannot edit

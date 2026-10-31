@@ -24,7 +24,11 @@ ATTEMPT_REPORT_SCHEMA = record({'attempt_id': {'type': 'string'},
                                 'outcome': {'type': 'string', 'enum': list(OUTCOMES)},
                                 'evidence': {'type': 'string'}, 'observation_refs': REFS_SCHEMA})
 RECOVERY_SCHEMA = record({'change_type': {'type': 'string', 'enum': ['strategy', 'prerequisite']},
-                          'description': {'type': 'string'}, 'observation_refs': REFS_SCHEMA})
+                          'description': {'type': 'string'}, 'observation_refs': REFS_SCHEMA,
+                          'necessity': {'type': 'string', 'enum': [
+                              'blocked_access', 'wrong_target', 'object_loss', 'unsafe_state',
+                              'goal_contradiction', 'useful_required_object_held', 'not_needed']}})
+LEGACY_RECOVERY_FIELDS = {'change_type', 'description', 'observation_refs'}
 ACTION_SCHEMA = record({'intent': {'type': 'string'}, 'object': {'type': 'string'},
                         'destination': {'type': 'string'}, 'instruction': {'type': 'string'}})
 
@@ -113,7 +117,9 @@ class GoalLedger:
                 raise ValueError('Requirement outcome needs a status and evidence')
             previous = candidate[identifier]
             last_step = max((ref['step'] for ref in previous['observation_refs']), default=-1)
-            self.validate_refs(update['observation_refs'], current_step, max(0, last_step))
+            self.validate_refs(update['observation_refs'], current_step)
+            if max(ref['step'] for ref in update['observation_refs']) < last_step:
+                raise ValueError('Requirement update needs evidence at least as recent as its last assessment')
             if update['status'] == 'satisfied' and max(ref['step'] for ref in update['observation_refs']) != current_step:
                 raise ValueError('Requirement satisfaction needs current observation evidence')
             if (previous['status'] == 'satisfied' and update['status'] != 'satisfied'
@@ -193,12 +199,19 @@ class AttemptHistory:
                 raise ValueError('Unknown/duplicate attempt or invalid outcome')
             if not isinstance(report['evidence'], str) or not report['evidence'].strip():
                 raise ValueError('Attempt outcome needs observation evidence')
-            self.ledger.validate_refs(report['observation_refs'], current_step, attempt['step_after'])
+            self.ledger.validate_refs(report['observation_refs'], current_step, attempt['step_before'])
+            if max(ref['step'] for ref in report['observation_refs']) < attempt['step_after']:
+                raise ValueError('Attempt review needs at least one after-action observation; before views may support comparison')
             # Repeated API assessments of one attempt never create new failures.
             if attempt['outcome'] != 'uncertain':
-                if any(report[key] != attempt[key] for key in ('outcome', 'evidence', 'observation_refs')):
+                if report['outcome'] != attempt['outcome']:
                     raise ValueError('A supported attempt report cannot be overwritten to reset failure history')
-            else:
+            # Equivalent outcomes may be paraphrased or gain new evidence without
+            # inventing another failure or erasing the earlier dated claim.
+            if any(report[key] != attempt[key] for key in ('outcome', 'evidence', 'observation_refs')):
+                old = {key: deepcopy(attempt[key]) for key in ('outcome', 'evidence', 'observation_refs')}
+                if old['observation_refs']:
+                    attempt['previous_reviews'] = (attempt.get('previous_reviews', []) + [old])[-12:]
                 attempt.update({key: deepcopy(report[key]) for key in ('outcome', 'evidence', 'observation_refs')})
             touched.add(identifier)
         self.attempts = candidate
@@ -218,7 +231,7 @@ class AttemptHistory:
         blocked = [identifier for identifier in goal_ids if len(self.failures(identifier)) >= self.failure_limit]
         if not blocked:
             return None
-        if not isinstance(recovery, dict) or set(recovery) != set(RECOVERY_SCHEMA['properties']):
+        if not isinstance(recovery, dict) or set(recovery) not in (set(RECOVERY_SCHEMA['properties']), LEGACY_RECOVERY_FIELDS):
             raise ValueError('Repeated supported goal failures require a changed strategy/prerequisite with evidence, or stop')
         if recovery['change_type'] not in ('strategy', 'prerequisite') or not isinstance(recovery['description'], str) or not recovery['description'].strip():
             raise ValueError('Recovery must explain what changes')

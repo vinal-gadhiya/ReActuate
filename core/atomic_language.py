@@ -21,7 +21,7 @@ def _pattern(template):
         parts.append(re.escape(template[cursor:match.start()]))
         token = match[1] or match[2]
         if match[0] == '(s)':
-            parts.append('s?')
+            parts.append(r'(?:s|\(s\))?')
         elif '/' in token:
             parts.append('(?:' + '|'.join(re.escape(option) for option in token.split('/')) + ')')
         else:
@@ -36,7 +36,7 @@ def _pattern(template):
 
 
 class AtomicInstructionGrounder:
-    VERSION = 'atomic-catalog-language-v1'
+    VERSION = 'atomic-catalog-language-v2'
 
     def __init__(self, catalog=None):
         self.catalog = catalog if catalog is not None else load_atomic_task_catalog()

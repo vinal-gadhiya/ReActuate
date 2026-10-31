@@ -26,9 +26,40 @@ branches. Policy observation formats and numerical actions remain unchanged.
    Window extensions do not consume recovery replans, but decision, API and
    episode budgets still apply. Intermediate transitions require ready handoff.
 8. The simulator defines the reported task score. Visual completion claims do
-   not set `success=True`. The default still allows stopping on supported visual
-   requirement claims, model stop, exhausted budgets, errors or environment end;
-   it does not promise execution until simulator success.
+   not set `success=True`. The default CLI `--execution-policy episode` continues
+   a valid committed stage until simulator success/end or the episode step limit.
+   A genuine execution error still fails the run. `--execution-policy bounded`
+   retains early model-stop and short retry-limit behavior for comparisons.
+
+## Stage commitment and episode budget
+
+One 32-step burst is a feedback interval, not an entire skill budget. Episode mode
+keeps the active stage's instruction through unsuccessful/uncertain observations.
+Its planned `max_steps`, retry/recovery counters, and stationary diagnostics do
+not terminate physical execution. API and decision limits still cap model calls;
+after they are exhausted, the runner continues the committed instruction without
+claiming completion or advancing to an unverified next stage. Continuations are
+logged as `policy_continuation` and ordinary tool/attempt events. A temporary
+recovery command does not replace the committed stage during fallback.
+
+Changing instructions before stage completion requires current evidence and a
+specific `recovery.necessity`: blocked access, wrong target, object loss, unsafe
+state, goal contradiction, or a useful required object already held. Failed
+bursts alone and switching tool aliases do not establish necessity. The judgment
+is still a model claim; the harness validates its structure/references, not visual
+truth. Replanning executed work requires the same intervention evidence. Stage
+completion requires a satisfied outcome with current observation evidence.
+
+When a completed action window has pending requirements, another validated window
+is required. If supervision is unavailable at that boundary, the harness reports
+the supervision limit; it does not invent a next instruction or replay a completed
+window. Maintain enough supervision budget for the intended number of stages.
+Model stop and malformed proposals during an unfinished stage do not end it.
+
+For a 2,000-step physical budget, use `--max-steps 2000 --execution-policy episode`.
+Rebuild and recreate both supervisor and simulator images for the new recovery
+schema and execution policy. This change grants execution time and controls
+switching; it does not guarantee that a frozen policy will produce useful motion.
 
 The ledger preserves the initial extraction. It cannot establish that Muse
 extracted every requirement correctly, identified objects correctly, or judged
@@ -71,8 +102,8 @@ run_groot(instruction="Place the mug on the tray.", steps=32)
 These are three separate decisions. Compatibility `navigate(fixture="dining
 counter", steps=32)` renders `Navigate to the dining counter.` Named destinations
 may be requested without prior sighting or original-task mention. Arrival remains
-a visual claim. Navigation has no separate default burst cap; explicit caps,
-stationarity checks and overall budgets apply.
+a visual claim. In episode mode the physical horizon applies; short navigation
+and stationarity limits remain available with bounded execution policy.
 
 Backend profiles currently use the same simple fallback phrasing. They provide a
 boundary for measured changes, not evidence that both policies perform equally.
@@ -96,7 +127,7 @@ Attempt outcomes are `intended_object_acquired`, `other_required_object_acquired
 simulator labels. Generic progress applies across task families. Uncertainty is
 not counted as confirmed failure.
 
-After `--max-goal-failures` supported unsuccessful outcomes (default 3), execution
+With `--execution-policy bounded`, after `--max-goal-failures` supported unsuccessful outcomes (default 3), execution
 requires a recovery proposal. A strategy must change the actual normalized
 command; a prerequisite retry must cite a subsequent executed action reported as
 changing that prerequisite. Previously used prerequisite evidence cannot justify
@@ -104,6 +135,12 @@ repeated retries. `--max-goal-recoveries` defaults to 2. Stage renaming and burs
 size changes do not reset history. Language normalization is only an accounting
 key; it never changes executed text. The harness cannot prove that a different
 sentence is a genuinely different physical strategy.
+
+Episode mode retains this history for diagnostics, but failure/recovery allowances
+do not terminate or force switching of the committed stage. Before/after references
+are accepted together when an after-action reference is present. Repeating the
+same supported outcome with new wording updates its evidence history without
+adding failures; changing a supported outcome to reset its count is rejected.
 
 ## Working context and perception
 

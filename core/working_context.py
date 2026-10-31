@@ -56,7 +56,7 @@ def working_context(context):
         'attempt_history', 'recovery_feedback', 'plan_validation_feedback', 'allowed_current_cameras',
         'decision_step_limit', 'episode_steps_left', 'api_calls_left', 'replans_left',
         'navigation_bursts_left', 'navigation_budget_mode', 'execution_limits', 'capabilities',
-        'control_owner', 'robot_measurements', 'supervisor_stop_policy',
+        'control_owner', 'robot_measurements', 'supervisor_stop_policy', 'execution_policy',
     ) if key in context}
     selected.update({
         'original_goal': context.get('original_goal') or (context.get('episode_context') or {}).get('original_goal', ''),

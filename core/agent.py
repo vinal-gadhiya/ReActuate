@@ -208,7 +208,7 @@ def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertica
         raise ValueError('A decision needs handoff readiness and supporting evidence')
     if status == 'continue':
         parse_program(decision['program'], max_steps, allow_gripper, allow_vertical)
-    elif decision['program'].strip():
+    elif decision['program'].strip() and not (status == 'stop' and decision['program'].strip().casefold() == 'stop'):
         raise ValueError('Only continue decisions may execute motion')
     if status == 'replan':
         validate_plan({'steps': decision['replacement_steps']})

@@ -53,6 +53,7 @@ def run_command(args, condition, seed, output, plan=None):
     if plan is not None:
         command += ['--plan', str(plan)]
     if condition != 'baseline':
+        command += ['--execution-policy', getattr(args, 'execution_policy', 'episode')]
         if getattr(args, 'depth', False):
             command += ['--depth', '--depth-max-metres', str(getattr(args, 'depth_max_metres', 3.0))]
         command += ['--subtask-budget-mode', args.subtask_budget_mode]
@@ -234,6 +235,7 @@ def main():
     parser.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS),
                         help='Ordered conditions; baseline must be first, muse precedes muse_sam')
     parser.add_argument('--max-steps', type=int)
+    parser.add_argument('--execution-policy', choices=('episode', 'bounded'), default='episode')
     parser.add_argument('--context-file', type=Path)
     parser.add_argument('--policy-url', default='http://inference:8000')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')

@@ -50,7 +50,23 @@ Current survey claims seed memory before the first decision without motion or an
 extra model call. Supplied-plan surveys remain historical. Explicit placement
 destinations are checked against the active stage before execution.
 
-`run_agent.py` and `compare.py` accept `--supervisor-stop-policy continue` for
+The CLI defaults to `--execution-policy episode`: an unfinished stage keeps its
+committed atomic instruction until verified complete, a necessary evidence-backed
+intervention, simulator success/end, or the physical episode horizon. Use
+`--max-steps 2000` for a 2,000-step horizon. A burst is an observation interval;
+short failure/recovery limits and planned subtask ceilings do not end execution.
+Decision/API limits cap supervision; when exhausted, bounded policy bursts keep
+the unfinished committed stage without advancing unverified work. Invalid
+proposals and model stops also trigger logged continuation. A completed window
+still requires supervision to supply a valid next window; no new action is invented
+if that cannot be obtained. Real execution errors remain errors.
+
+Changing an unfinished stage requires current observation references and a
+specific `recovery.necessity`, not merely a few failed bursts or another tool
+alias. Completion needs current satisfied evidence. These rules are shared across
+all tasks. See the agent guide for intervention reasons and deployment commands.
+
+With `--execution-policy bounded`, `run_agent.py` and `compare.py` accept `--supervisor-stop-policy continue` for
 simulation comparisons that should keep trying within the episode budget. A Muse
 `stop` request then retries the last successfully executed `run_groot` instruction
 for the current subtask for at most 16 steps, followed by another supervisor
