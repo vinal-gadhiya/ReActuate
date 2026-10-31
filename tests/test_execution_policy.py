@@ -33,10 +33,12 @@ class EpisodeExecutionTests(unittest.TestCase):
             with self.subTest(instruction=instruction):
                 ledger, tools, events, plan = self.setup_episode(instruction)
                 attempts = AttemptHistory(ledger, failure_limit=1, recovery_limit=0)
+                limits = []
 
-                def decide(*args):
+                def decide(active_plan, index, spent, limit):
+                    limits.append(limit)
                     result = proposal('continue', tools.steps, instruction)
-                    result['program'] = f'run_groot(instruction={instruction!r}, steps=32)'
+                    result['program'] = f'run_groot(instruction={instruction!r}, steps={limit})'
                     if attempts.attempts:
                         last = attempts.attempts[-1]
                         result['attempt_reports'] = [{
@@ -50,7 +52,33 @@ class EpisodeExecutionTests(unittest.TestCase):
                 self.assertEqual(reason, 'episode_step_budget')
                 self.assertEqual(tools.steps, 2000)
                 self.assertEqual(set(tools.instructions), {instruction})
-                self.assertFalse(any(event['event'] == 'invalid_decision' for event in events))
+                self.assertEqual([event['reason'] for event in events if event['event'] == 'invalid_decision'], [])
+                self.assertEqual(limits, [32] * 62 + [16])
+                executed = [event for event in events if event['event'] == 'tool']
+                self.assertEqual(executed[-1]['arguments']['steps'], 16)
+                self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
+
+    def test_oversized_final_burst_is_rejected_and_continuation_respects_remaining_steps(self):
+        ledger, tools, events, plan = self.setup_episode('Open the cabinet.', 48)
+
+        def decide(*args):
+            result = proposal('continue', tools.steps, 'Open the cabinet.')
+            # Deliberately violate the final 16-step request limit. The runner
+            # must reject this proposal, then continue only the committed stage.
+            result['program'] = 'run_groot(instruction="Open the cabinet.", steps=32)'
+            return result
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=10)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 48)
+        rejected = [event for event in events if event['event'] == 'invalid_decision']
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]['step'], 32)
+        self.assertEqual(rejected[0]['reason'], 'Invalid tool step budget')
+        executed = [event for event in events if event['event'] == 'tool']
+        self.assertEqual([event['step_after'] - event['step_before'] for event in executed], [32, 16])
+        self.assertEqual(executed[-1]['arguments']['steps'], 16)
+        self.assertEqual(set(tools.instructions), {'Open the cabinet.'})
 
     def test_model_stop_and_zero_stop_allowance_still_use_remaining_physical_budget(self):
         ledger, tools, events, plan = self.setup_episode('Open the cabinet.', 256)
