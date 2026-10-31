@@ -174,10 +174,13 @@ class StagedInstructionTests(unittest.TestCase):
                      concise_instructions=True)
         self.assertEqual(tools.instructions, [original])
 
-    def test_supervisor_returns_actionable_feedback_for_combined_stage(self):
+    def test_supervisor_returns_actionable_feedback_for_multiple_tool_calls(self):
+        program = ('run_groot(instruction="Pick up the cup.", steps=16)\n'
+                   'run_groot(instruction="Place the cup on the tray.", steps=16)')
+
         class API:
             def response(self, *args, **kwargs):
-                return decision(program='run_groot(instruction="Pick up the cup and place it on the tray.", steps=16)'), {}
+                return decision(program=program), {}
 
         response = Supervisor(API(), 'muse', use_sam=False).handle('decide', {
             'step': step('pick', 'Pick up the cup.'), 'decision_step_limit': 32,
@@ -185,4 +188,21 @@ class StagedInstructionTests(unittest.TestCase):
             'instruction_style': 'single_stage',
         }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
         self.assertEqual(response['api_calls'], 1)
-        self.assertIn('distinct stages', response['validation_error'])
+        self.assertIn('one simple stage per decision', response['validation_error'])
+        self.assertEqual(response['result']['program'], program)
+
+    def test_supervisor_treats_instruction_wording_as_guidance(self):
+        program = 'run_groot(instruction="Pick up the cup and place it on the tray.", steps=16)'
+
+        class API:
+            def response(self, *args, **kwargs):
+                return decision(program=program), {}
+
+        response = Supervisor(API(), 'muse', use_sam=False).handle('decide', {
+            'step': step('transfer', 'Transfer the cup to the tray.'), 'decision_step_limit': 32,
+            'api_calls_left': 1, 'use_sam': False, 'capabilities': {'set_gripper': False},
+            'instruction_style': 'single_stage',
+        }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
+        self.assertEqual(response['api_calls'], 1)
+        self.assertIsNone(response['validation_error'])
+        self.assertEqual(response['result']['program'], program)
