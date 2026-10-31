@@ -184,6 +184,109 @@ class EpisodeExecutionTests(unittest.TestCase):
         self.assertEqual(set(tools.instructions[1:]), {'Pick up the bowl.'})
         self.assertEqual(next(event for event in events if event['event'] == 'subtask_transition')['subtask'], 'access')
 
+    def test_satisfied_continue_advances_immediately_across_task_families(self):
+        for first, following in (
+            ('Open the cabinet.', 'Pick up the bowl.'),
+            ('Navigate to the counter.', 'Place the bowl on the tray.'),
+            ('Turn on the sink faucet.', 'Place the bowl in the sink.'),
+            ('Place the bowl on the tray.', 'Close the cabinet.'),
+        ):
+            for proposed_instruction in (first, following):
+                with self.subTest(first=first, proposed_instruction=proposed_instruction):
+                    ledger, tools, events, _ = self.setup_episode(first, 4)
+                    plan = [stage('first-stage', 'first', first), stage('next-stage', 'first', following)]
+                    observed = []
+
+                    def decide(active, index, spent, limit):
+                        observed.append((active[index]['id'], tools.steps))
+                        if len(observed) == 1:
+                            return proposal('continue', tools.steps, first)
+                        if len(observed) == 2:
+                            result = proposal('continue', tools.steps, proposed_instruction)
+                            result['assessment']['outcome'] = 'satisfied'
+                            # Completion must not require the final requirement,
+                            # downstream grasp, next motion, or handoff to be done.
+                            result['handoff']['readiness'] = 'not_applicable'
+                            return result
+                        return proposal('continue', tools.steps, following)
+
+                    reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=3)
+                    self.assertEqual(reason, 'episode_step_budget')
+                    self.assertEqual(observed, [('first-stage', 0), ('first-stage', 1), ('next-stage', 1)])
+                    self.assertEqual(tools.instructions[0], first)
+                    self.assertEqual(set(tools.instructions[1:]), {following})
+                    self.assertEqual(ledger.pending(), ['first'])
+                    transition = next(event for event in events if event['event'] == 'subtask_transition')
+                    self.assertEqual(transition['step'], 1)
+                    self.assertEqual(transition['subtask'], 'first-stage')
+                    self.assertFalse(any(event['event'] == 'invalid_decision' for event in events))
+
+    def test_satisfied_replan_completes_stage_before_applying_next_window(self):
+        ledger, tools, events, _ = self.setup_episode('Open the cabinet.', 4)
+        plan = [stage('access', 'first', 'Open the cabinet.'),
+                stage('old-next', 'first', 'Pick up the bowl.')]
+        replacement = [stage('reordered-next', 'first', 'Navigate to the counter.')]
+        observed = []
+
+        def decide(active, index, spent, limit):
+            observed.append((active[index]['id'], tools.steps))
+            if len(observed) == 1:
+                return proposal('continue', tools.steps, 'Open the cabinet.')
+            if len(observed) == 2:
+                result = proposal('replan', tools.steps, replacement=replacement)
+                result['assessment']['outcome'] = 'satisfied'
+                return result
+            return proposal('continue', tools.steps, 'Navigate to the counter.')
+
+        self.run_episode(ledger, tools, events, plan, decide, max_decisions=3, max_replans=0)
+        self.assertEqual(observed[-1], ('reordered-next', 1))
+        self.assertEqual(tools.instructions[0], 'Open the cabinet.')
+        self.assertEqual(set(tools.instructions[1:]), {'Navigate to the counter.'})
+        self.assertEqual(next(event for event in events if event['event'] == 'plan_replaced')['kind'], 'completion_replan')
+        self.assertEqual(ledger.pending(), ['first'])
+
+    def test_metadata_correction_after_completion_does_not_replay_finished_stage(self):
+        ledger, tools, events, _ = self.setup_episode('Open the cabinet.', 4)
+        plan = [stage('access', 'first', 'Open the cabinet.'), stage('pick', 'first', 'Pick up the bowl.')]
+        observed = []
+
+        def decide(active, index, spent, limit):
+            observed.append((active[index]['id'], tools.steps))
+            if len(observed) == 1:
+                return proposal('continue', tools.steps, 'Open the cabinet.')
+            if len(observed) == 2:
+                result = proposal('continue', tools.steps, 'Pick up the bowl.')
+                result['assessment']['outcome'] = 'satisfied'
+                result['goal_updates'] = [{'invalid': 'metadata'}]
+                return result
+            if len(observed) == 3:
+                return proposal('complete', tools.steps)
+            return proposal('continue', tools.steps, 'Pick up the bowl.')
+
+        self.run_episode(ledger, tools, events, plan, decide, max_decisions=4)
+        self.assertEqual(observed, [('access', 0), ('access', 1), ('access', 1), ('pick', 1)])
+        self.assertEqual(tools.instructions[0], 'Open the cabinet.')
+        self.assertEqual(set(tools.instructions[1:]), {'Pick up the bowl.'})
+        invalid = next(event for event in events if event['event'] == 'invalid_decision')
+        self.assertIn('finished stage will not be replayed', invalid['feedback'])
+
+    def test_completion_never_replays_old_stage_when_supervision_ends_at_boundary(self):
+        ledger, tools, events, _ = self.setup_episode('Open the cabinet.', 2000)
+        plan = [stage('access', 'first', 'Open the cabinet.'), stage('pick', 'first', 'Pick up the bowl.')]
+        replies = iter([proposal('continue', 0, 'Open the cabinet.'), proposal('complete', 1)])
+        reason = self.run_episode(ledger, tools, events, plan, lambda *args: next(replies), max_decisions=2)
+        self.assertEqual(reason, 'decision_budget')
+        self.assertEqual(tools.steps, 1)
+        self.assertEqual(tools.instructions, ['Open the cabinet.'])
+        self.assertEqual(len([event for event in events if event['event'] == 'subtask_transition']), 1)
+
+    def test_last_stage_completion_requests_more_planning_without_repeating_it(self):
+        ledger, tools, events, plan = self.setup_episode('Open the cabinet.')
+        replies = iter([proposal('continue', 0, 'Open the cabinet.'), proposal('complete', 1)])
+        self.run_episode(ledger, tools, events, plan, lambda *args: next(replies), max_decisions=2)
+        self.assertEqual(tools.instructions, ['Open the cabinet.'])
+        self.assertTrue(any(event['event'] == 'planning_window_exhausted' for event in events))
+
     def test_stale_completion_cannot_advance_stage(self):
         ledger, tools, events, plan = self.setup_episode('Open the cabinet.', 64)
         plan.append(stage('later', 'first', 'Pick up the bowl.'))

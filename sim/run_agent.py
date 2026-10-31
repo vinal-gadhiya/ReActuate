@@ -10,7 +10,7 @@ import uuid
 
 import numpy as np
 
-from core.agent import (parse_program, validate_decision, validate_stage_program,
+from core.agent import (parse_program, validate_decision, validate_plan, validate_stage_program,
                         validate_placement_destination, navigation_fixture)
 from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError, PolicyHTTPError
@@ -19,7 +19,7 @@ from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
-from core.execution import validate_stage_switch
+from core.execution import completed_stage_decision, validate_stage_switch
 from copy import deepcopy
 from core.episode_context import EpisodeContext
 from core.observations import check_rgb
@@ -233,6 +233,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
     attempts = attempt_history if attempt_history is not None else (AttemptHistory(ledger) if ledger is not None else None)
     adapter = instruction_adapter or PolicyInstructionAdapter('gr00t')
     window_exhausted = False
+    completed_stage_id = None
+    stage_motion_authorized = True  # The initial plan authorizes its first stage.
     if ledger is not None:
         ledger.validate_window(plan)
     if mode == 'agent' and instruction_grounder is not None:
@@ -241,7 +243,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
     def continue_active(reason):
         """Continue the declared stage, never the last temporary recovery command."""
         nonlocal spent, last_transfer, last_action
-        if not persistent or tools.done or window_exhausted:
+        if (not persistent or tools.done or window_exhausted or not stage_motion_authorized
+                or completed_stage_id == plan[index]['id']):
             return False
         instruction = plan[index]['instruction']
         grounding = instruction_grounder.validate(instruction) if instruction_grounder is not None else None
@@ -277,6 +280,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
 
     while not tools.done and index < len(plan):
         supervisor_unavailable = False
+        completion_event = None
+        completion_replacement = None
         step = plan[index]
         remaining = tools.max_steps - tools.steps
         if mode != 'agent' or (subtask_budget_mode == 'plan' and not persistent):
@@ -328,6 +333,22 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'api_budget'
             try:
                 if not supervisor_unavailable:
+                    if persistent and not window_exhausted:
+                        completed = completed_stage_decision(decision, tools.steps, ledger)
+                        if completed is not None:
+                            # A confirmed stage must never be replayed because
+                            # unrelated proposal metadata needs correction.
+                            completed_stage_id = step['id']
+                            if decision.get('status') != 'complete':
+                                completion_event = {
+                                    'event': 'stage_completion_normalized', 'step': tools.steps,
+                                    'subtask': step['id'], 'original_status': decision.get('status'),
+                                    'discarded_program': decision.get('program'),
+                                    'observation_refs': completed['assessment']['observation_refs'],
+                                    'reason': 'Current satisfied assessment completes this stage; next motion needs a decision for the next stage.'}
+                            if decision.get('status') == 'replan':
+                                completion_replacement = decision.get('replacement_steps')
+                            decision = completed
                     validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
                                       getattr(tools, 'allow_vertical', False))
                     if instruction_grounder is not None:
@@ -367,13 +388,18 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 invalid_decisions += 1
                 record({'event': 'invalid_decision', 'step': tools.steps, 'reason': str(error),
                         'proposal': decision, 'consecutive_rejections': invalid_decisions,
-                        'feedback': 'No motion or memory updates executed. Correct this proposal using available tools and current limits.'})
+                        'feedback': ('Current completion evidence has been recognized; the finished stage will not '
+                                     'be replayed. Correct the remaining metadata using status=complete.'
+                                     if completed_stage_id == step['id'] else
+                                     'No motion or memory updates executed. Correct this proposal using available tools and current limits.')})
                 if continue_active('invalid_decision: ' + str(error)):
                     continue
                 if invalid_decisions >= 3:
                     return 'invalid_decision_limit'
                 continue
             invalid_decisions = 0
+            if completion_event is not None:
+                record(completion_event)
             if not supervisor_unavailable:
                 memory.update(decision, tools.steps, decisions)
                 record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
@@ -432,7 +458,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'recovery_required', 'step': tools.steps,
                         'reason': 'This action window is already complete. Replan for persistent pending requirements or stop.'})
                 continue
-            if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
+            if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready' and not persistent:
                 record({'event': 'transition_blocked', 'subtask': step['id'],
                         'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
                         'reason': 'Next-step prerequisites have not been visually established.',
@@ -443,6 +469,28 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'subtask_transition', 'subtask': step['id'],
                         'completed_step': dict(step), 'step': tools.steps,
                         'completion_evidence': decision['evidence'], 'handoff': decision['handoff']})
+            if persistent and completion_replacement is not None:
+                try:
+                    validate_plan({'steps': completion_replacement})
+                    if instruction_grounder is not None:
+                        instruction_grounder.validate_plan(completion_replacement)
+                    if ledger is not None:
+                        ledger.validate_window(completion_replacement)
+                    prefix = plan[:index + 1]
+                    if {item['id'] for item in prefix} & {item['id'] for item in completion_replacement}:
+                        raise ValueError('Completion replan reused a completed stage ID')
+                except (ValueError, KeyError, TypeError) as error:
+                    record({'event': 'recovery_required', 'step': tools.steps,
+                            'reason': f'Stage completed; replacement rejected: {error}. Existing pending stages remain.'})
+                else:
+                    plan = prefix + completion_replacement
+                    index, spent = len(prefix), 0
+                    window_exhausted, completed_stage_id = False, None
+                    stage_motion_authorized = False
+                    record({'event': 'plan_replaced', 'subtask': step['id'], 'step': tools.steps,
+                            'steps': [dict(item) for item in plan], 'reason': decision['evidence'],
+                            'kind': 'completion_replan'})
+                    continue
             if ledger is not None and index + 1 == len(plan) and ledger.pending():
                 window_exhausted = True
                 record({'event': 'planning_window_exhausted', 'step': tools.steps,
@@ -450,9 +498,14 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                         'reason': 'Extend the short action window. Original requirements remain pending in the ledger.'})
                 continue
             if persistent and index + 1 == len(plan) and not tools.done:
-                if continue_active('final_visual_completion_unconfirmed_by_episode_end'):
-                    continue
+                window_exhausted = True
+                record({'event': 'planning_window_exhausted', 'step': tools.steps,
+                        'pending_goal_ids': ledger.pending() if ledger is not None else [],
+                        'reason': 'Last stage is visually complete but episode remains active. Review remaining requirements and propose a valid next window; do not replay completed work.'})
+                continue
             index, spent = index + 1, 0
+            completed_stage_id = None
+            stage_motion_authorized = False
             continue
         if status == 'replan':
             if not window_exhausted and replans >= max_replans:
@@ -481,6 +534,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     'kind': 'window_extension' if extension else 'recovery'})
             replans, spent = replans + int(not extension), 0
             window_exhausted = False
+            completed_stage_id = None
+            stage_motion_authorized = False
             continue
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
                                  getattr(tools, 'allow_vertical', False))
@@ -544,6 +599,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 return 'recovery_unavailable'
             continue
         rejected = 0
+        stage_motion_authorized = True
         motion_left = (placement_burst_steps if transport is not None and memory.near_destination()
                        else decision_steps)
         if transport is not None and transport.held_object:
@@ -744,7 +800,7 @@ def main():
                     json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed', 'policy_continuation'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed', 'policy_continuation', 'stage_completion_normalized'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -832,7 +888,10 @@ def main():
                     'goal_ledger': ledger.context() if ledger is not None else None,
                     'attempt_history': attempts.context(context.get('step', {}).get('goal_ids', [])) if attempts is not None else None,
                     'recovery_feedback': [item for item in history if item['event'] in (
-                        'recovery_required', 'invalid_decision', 'planning_window_exhausted', 'policy_continuation')][-3:],
+                        'recovery_required', 'invalid_decision', 'planning_window_exhausted', 'policy_continuation',
+                        'stage_completion_normalized')][-3:],
+                    'last_stage_transition': next((item for item in reversed(history)
+                                                   if item['event'] == 'subtask_transition'), None),
                     'depth_observations': depth_context,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
@@ -849,7 +908,7 @@ def main():
                                                max(0, args.max_navigation_bursts - memory.navigation_bursts)),
                     'navigation_budget_mode': 'episode' if args.max_navigation_bursts is None else 'burst_cap',
                     'replans_left': max(0, args.max_replans - sum(
-                        item['event'] == 'plan_replaced' and item.get('kind') != 'window_extension' for item in history)),
+                        item['event'] == 'plan_replaced' and item.get('kind') not in ('window_extension', 'completion_replan') for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'recent_motion': [{
                         'tool': item['tool'], 'step_before': item['step_before'], 'step_after': item['step_after'],

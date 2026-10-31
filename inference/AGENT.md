@@ -50,6 +50,22 @@ is still a model claim; the harness validates its structure/references, not visu
 truth. Replanning executed work requires the same intervention evidence. Stage
 completion requires a satisfied outcome with current observation evidence.
 
+Current `assessment.outcome=satisfied` ends the active stage in episode mode,
+even when the response mistakenly uses continue/replan or repeats the old command.
+The runner normalizes the control fields to a zero-motion completion and records
+`stage_completion_normalized`. A proposed next command is not executed from that
+old-stage assessment: the runner immediately asks for the next stage at the SAME
+simulator step. A valid replacement window in a completion response is applied
+after accepting the completion, without consuming a failure recovery replan.
+
+No completed-stage instruction is replayed by fallback, including when another
+metadata field needs correction or supervision ends at the boundary. Handoff
+uncertainty does not undo completion: the next stage must get its own validated
+motion decision. The last accepted stage transition is included in working
+context. Intermediate stage verification uses public observations against that
+stage's criterion; it never waits for the entire task score, later acquisition,
+or an unavailable simulator subtask-success signal. No per-task rules are added.
+
 When a completed action window has pending requirements, another validated window
 is required. If supervision is unavailable at that boundary, the harness reports
 the supervision limit; it does not invent a next instruction or replay a completed

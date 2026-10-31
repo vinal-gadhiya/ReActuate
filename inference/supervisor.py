@@ -125,12 +125,37 @@ Complete requires current evidence, not old before views alone. Attempt reports
 may cite both before and after frames, but need at least one after-action frame.
 Repeated evidence paraphrases for the SAME outcome do not count as more failures.
 
-Complete a stage only with supported satisfied evidence and ready handoff when
-another stage follows. Replan changes only the next action window; it cannot edit
+Complete a stage only with supported satisfied current evidence. Report readiness
+for subsequent work separately. Replan changes only the next action window; it cannot edit
 or delete ledger requirements. Reuse the stable goal IDs. An exhausted window
 with pending requirements requires another window, not task completion. Window
 extensions are not recovery replans. All execution, decision, API, and recovery
 budgets still apply. A positive visual judgment does not set the simulator score.
+
+STAGE COMPLETION RELEASES COMMITMENT: assessment describes ONLY the active stage's
+success_criteria. It does not require later stages or the associated final ledger
+requirement to be achieved. As soon as current evidence satisfies that criterion,
+return status=complete, program="", action=null, replacement_steps=[], with the
+current assessment.outcome=satisfied. The runner records the completed stage and
+asks for the next stage at the SAME simulator step. Do not keep executing an
+already satisfied instruction to obey commitment. Do not label that evidence
+unknown merely because the task or a later goal is unfinished.
+If a response instead combines a satisfied assessment with continue or replan,
+the harness treats the completion as a zero-motion transition; any next motion
+proposal is deferred for a decision about the next stage. A valid replacement
+window may follow the accepted completion without counting as failure recovery.
+Stage completion is not an interruption and needs no recovery.necessity.
+Handoff describes readiness for subsequent work, not whether the finished stage
+remains finished. If readiness is uncertain, preserve completion and assess the
+next stage's prerequisites; never repeat the finished stage just for that reason.
+No simulator subtask-success predicate or hidden completion threshold is supplied.
+Use current sensor evidence against the actual stage criterion. An occluded view
+is missing evidence, not automatically a contradiction of a clear confirming view.
+Do not demand all cameras agree or add stricter criteria than the declared stage
+and actual task require. The simulator score evaluates the ENTIRE task; it is not
+needed to verify each intermediate stage. A validation rejection concerns the
+proposal contract, not the truth of its visual evidence: do not reinterpret a
+confirmed physical effect as absent just because control fields were rejected.
 
 Read current observations before older beliefs; belief age and conflicting
 evidence matter. Relevant task references are suggestions, not tools or verified

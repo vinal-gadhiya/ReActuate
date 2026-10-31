@@ -50,7 +50,7 @@ def working_context(context):
     for item in beliefs:
         item['age_steps'] = max(0, context.get('observation_step', 0) - (item['observation_step'] or 0))
     selected = {key: deepcopy(context[key]) for key in (
-        'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used',
+        'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used', 'last_stage_transition',
         'subtask_budget_mode', 'planning_window_exhausted', 'candidate_plan', 'diagnostic_replay',
         'observation_step', 'before_observation_step', 'observation_refs', 'depth_observations',
         'attempt_history', 'recovery_feedback', 'plan_validation_feedback', 'allowed_current_cameras',
