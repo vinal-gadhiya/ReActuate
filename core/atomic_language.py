@@ -77,6 +77,13 @@ class AtomicInstructionGrounder:
     def validate_plan(self, steps):
         return [self.validate(step['instruction']) for step in steps]
 
+    def validate_generated(self, instruction, committed_instruction=None):
+        """Apply catalog vocabulary/format equally to new and committed text."""
+        return self.validate(instruction)
+
+    def validate_generated_plan(self, steps, committed_instruction=None):
+        return [self.validate_generated(step['instruction'], committed_instruction) for step in steps]
+
 
 @lru_cache(maxsize=1)
 def atomic_instruction_grounder():

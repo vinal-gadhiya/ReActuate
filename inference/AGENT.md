@@ -234,8 +234,20 @@ dated samples from the recent motion buffer, regardless of SAM settings. The
 frame mapping and actual supplied references are recorded and validated. Sensor
 inputs and numerical actions sent to the frozen policy remain unchanged.
 
-A supported current satisfied review returns a zero-motion stage completion
-directly; the runner then asks about the next stage at the same physical step.
+A positive review now requires a separate completion-confirmation request. It
+challenges the proposed physical effect and returns explicit condition checks
+with dated current evidence. All necessary checks must be observed; any unknown
+or contradicted condition prevents confirmation. A glimpse of interior is not
+proof of usable access: the reviewer must assess the intended workspace and
+approach/withdrawal clearance, including relevant partly closed panels. No fixed
+panel count, opening angle, or task-specific threshold is imposed.
+A confirmed review returns a zero-motion stage completion; the runner then asks
+about the next stage at the same physical step. Planner completion claims use
+the same confirmation gate, so the planner cannot bypass a doubtful review.
+Unconfirmed or invalid confirmation returns inspection without motion or stage
+advancement. Both assessments are retained in the response/audit under
+`boundary_review` and `completion_confirmation`. These are two fallible visual
+judgments from the same model, not independent physical measurements.
 The review does not mark ledger requirements satisfied or change simulator score.
 Unknown/unsatisfied reviews go to the planner as fallible evidence. Invalid or
 stale review references cannot advance a stage. The review is in
@@ -244,12 +256,22 @@ This is independent review by the same Muse model, not an independently trained
 grasp detector or a guarantee of correct perception.
 
 The reviewer shares the existing API budget: unresolved decisions use two Muse
-calls, plus SAM when enabled and budget permits. With only one call remaining,
-the reviewer and SAM are skipped to preserve planning. No reviewer runs for an
+calls, plus SAM when enabled and budget permits. Positive completion adds a
+confirmation call (a positive first review uses two calls total and skips action
+planning/SAM). With only one call remaining, the reviewer and SAM are skipped
+to preserve planning, but an unconfirmed planner completion cannot advance the
+stage when the confirmation budget is exhausted. No reviewer runs for an
 exhausted planning window. Use `--no-boundary-review` for paired ablation; temporal
 images remain enabled. Compare labelled real frames and paired scenes across
 task families, including false completion judgments and baseline regressions,
 before claiming perception quality improved.
+
+Generated instructions follow atomic descriptions and documented forms, retaining
+their action vocabulary and sentence structure while filling scene entity slots.
+Published door(s) wording remains valid, including singular/plural instantiations;
+there is no extra whole-fixture shortening rule. Reasoning and completion criteria
+stay outside policy instructions. Explicit operator text is preserved verbatim;
+invalid generated language receives feedback rather than a silent rewrite.
 
 Completion of an access helper means sufficient clearance and reach to the
 required working area, not visibility of some contents alone. Plan criteria and

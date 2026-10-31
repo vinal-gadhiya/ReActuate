@@ -358,11 +358,13 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                                       getattr(tools, 'allow_vertical', False))
                     if instruction_grounder is not None:
                         if decision['status'] == 'replan':
-                            instruction_grounder.validate_plan(decision['replacement_steps'])
+                            instruction_grounder.validate_generated_plan(
+                                decision['replacement_steps'], committed_instruction=step['instruction'])
                         elif decision['status'] == 'continue':
                             for name, arguments in parse_program(decision['program'], max(0, min(decision_steps, remaining))):
-                                instruction_grounder.validate(arguments['instruction'] if name == 'run_groot' else
-                                                              f'Navigate to the {arguments["fixture"]}.')
+                                instruction_grounder.validate_generated(
+                                    arguments['instruction'] if name == 'run_groot' else
+                                    f'Navigate to the {arguments["fixture"]}.', committed_instruction=step['instruction'])
                     if persistent:
                         if decision['status'] == 'continue':
                             for name, arguments in parse_program(decision['program'], min(decision_steps, remaining)):
@@ -478,7 +480,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 try:
                     validate_plan({'steps': completion_replacement})
                     if instruction_grounder is not None:
-                        instruction_grounder.validate_plan(completion_replacement)
+                        instruction_grounder.validate_generated_plan(completion_replacement)
                     if ledger is not None:
                         ledger.validate_window(completion_replacement)
                     prefix = plan[:index + 1]
@@ -550,8 +552,9 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 raise ValueError('Action window complete: replan for pending requirements before executing more work')
             if mode == 'agent' and instruction_grounder is not None:
                 for name, arguments in commands:
-                    instruction_grounder.validate(arguments['instruction'] if name == 'run_groot' else
-                                                  f'Navigate to the {arguments["fixture"]}.')
+                    instruction_grounder.validate_generated(
+                        arguments['instruction'] if name == 'run_groot' else
+                        f'Navigate to the {arguments["fixture"]}.', committed_instruction=step['instruction'])
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
                 if ledger is None:

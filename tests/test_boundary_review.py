@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from core.boundary_review import temporal_snapshots, validate_boundary_review
+from core.boundary_review import temporal_snapshots, validate_boundary_review, validate_confirmation
 from inference.supervisor import Supervisor
 from inference.meta_api import MetaAPIError
 from tests.test_agent import step
@@ -16,6 +16,14 @@ from tests.test_execution_policy import proposal
 def assessment(outcome='satisfied', observed_step=32, camera='current:video.wrist'):
     return {'outcome': outcome, 'evidence': 'The current view supports the active stage effect.',
             'observation_refs': [{'step': observed_step, 'camera': camera}], 'transport': None}
+
+
+def confirmation(verdict='confirmed', status='observed'):
+    return {'verdict': verdict, 'evidence': 'Current views establish the required physical effect.',
+            'observation_refs': assessment()['observation_refs'],
+            'checks': [{'criterion': 'Required physical effect and usable state.', 'status': status,
+                        'evidence': 'Current camera exposes this condition.',
+                        'observation_refs': assessment()['observation_refs']}]}
 
 
 class BoundaryReviewTests(unittest.TestCase):
@@ -64,6 +72,8 @@ class BoundaryReviewTests(unittest.TestCase):
             class API:
                 def response(self, model, content, **kwargs):
                     calls.append((content, kwargs))
+                    if len(calls) == 2:
+                        return confirmation(), {'model': model}
                     return {'assessment': assessment()}, {'model': model}
 
             context = self.context()
@@ -71,15 +81,85 @@ class BoundaryReviewTests(unittest.TestCase):
             context['step']['success_criteria'] = criterion
             with self.subTest(instruction=instruction):
                 reply = Supervisor(API(), 'muse').handle('decide', context, self.images())
-                self.assertEqual(reply['api_calls'], 1)
+                self.assertEqual(reply['api_calls'], 2)
                 self.assertEqual(reply['result']['status'], 'complete')
                 self.assertEqual(reply['result']['program'], '')
                 self.assertIsNone(reply['result']['action'])
                 self.assertEqual(reply['result']['goal_updates'], [])
-                self.assertEqual(len(calls), 1)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(reply['completion_confirmation']['verdict'], 'confirmed')
                 reviewer_context = json.loads(calls[0][0][0]['text'])
                 self.assertNotIn('scene_memory', reviewer_context)
                 self.assertNotIn('attempt_history', reviewer_context)
+
+    def test_partial_effect_or_unknown_clearance_cannot_end_stage(self):
+        for verdict, status in (('incomplete', 'contradicted'), ('uncertain', 'unknown'), ('confirmed', 'unknown')):
+            calls = []
+
+            class API:
+                def response(self, model, content, **kwargs):
+                    calls.append(kwargs['schema'])
+                    if len(calls) == 1:
+                        return {'assessment': assessment()}, {'model': model}
+                    return confirmation(verdict, status), {'model': model}
+
+            with self.subTest(verdict=verdict, status=status):
+                reply = Supervisor(API(), 'muse').handle('decide', self.context(2), self.images())
+                self.assertEqual(reply['api_calls'], 2)
+                self.assertEqual(reply['result']['status'], 'inspect')
+                self.assertEqual(reply['result']['assessment']['outcome'], 'unknown')
+                self.assertEqual(reply['result']['program'], '')
+                self.assertEqual([entry['role'] for entry in reply['audit']],
+                                 ['boundary_review', 'completion_confirmation'])
+
+    def test_planner_cannot_bypass_confirmation_or_exhausted_confirmation_budget(self):
+        for budget in (1, 3):
+            calls = []
+
+            class API:
+                def response(self, model, content, **kwargs):
+                    calls.append(kwargs['schema'])
+                    if budget == 3 and len(calls) == 1:
+                        return {'assessment': assessment('unknown')}, {'model': model}
+                    if budget == 3 and len(calls) == 3:
+                        return confirmation('uncertain', 'unknown'), {'model': model}
+                    result = proposal('complete', 32)
+                    result['assessment'] = assessment()
+                    return result, {'model': model}
+
+            with self.subTest(budget=budget):
+                reply = Supervisor(API(), 'muse').handle('decide', self.context(budget), self.images())
+                self.assertEqual(reply['api_calls'], budget)
+                self.assertEqual(reply['result']['status'], 'inspect')
+                self.assertEqual(reply['result']['program'], '')
+
+    def test_confirmation_checks_require_current_supplied_evidence(self):
+        for kind in ('empty', 'stale', 'future', 'camera'):
+            result = confirmation()
+            if kind == 'empty':
+                result['checks'] = []
+            else:
+                result['checks'][0]['observation_refs'] = assessment(
+                    observed_step=0 if kind == 'stale' else 99 if kind == 'future' else 32,
+                    camera='invented' if kind == 'camera' else 'current:video.wrist')['observation_refs']
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                validate_confirmation(result, self.context())
+
+    def test_confirmation_failure_preserves_review_usage_without_claiming_completion(self):
+        calls = []
+
+        class API:
+            def response(self, model, content, **kwargs):
+                calls.append(kwargs['schema'])
+                if len(calls) == 1:
+                    return {'assessment': assessment()}, {'model': model}
+                raise MetaAPIError('temporary confirmation failure', retryable=True)
+
+        with self.assertRaises(MetaAPIError) as caught:
+            Supervisor(API(), 'muse').handle('decide', self.context(2), self.images())
+        self.assertEqual(caught.exception.api_calls, 2)
+        self.assertEqual(len(caught.exception.audit), 1)
+        self.assertEqual(caught.exception.audit[0]['role'], 'boundary_review')
 
     def test_uncertain_or_invalid_review_preserves_planner_and_api_accounting(self):
         for candidate in (assessment('unknown'), assessment(observed_step=999)):

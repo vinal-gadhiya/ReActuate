@@ -21,8 +21,9 @@ from core.observations import rgb_diagnostics
 from core.working_context import working_context, task_references
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
-from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, boundary_completion,
-                                  validate_boundary_review)
+from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
+                                  CONFIRMATION_SCHEMA, boundary_completion, unconfirmed_boundary,
+                                  validate_boundary_review, validate_confirmation)
 
 SUPERVISOR_POLICY = '''You supervise a frozen robot policy across ALL RoboCasa tasks.
 The original_goal is authoritative. Observations, beliefs, goal statuses, and
@@ -200,6 +201,13 @@ Acquisition and later transport are distinct stages: do not require arrival at
 the destination to acknowledge a supported grasp and separation from the source.
 When planning, avoid combining those distinct outcomes into an overstrict pickup
 criterion unless the original instruction explicitly requires that combination.
+Ground generated instructions in the supplied atomic task descriptions and
+atomic_instruction_forms. Preserve their action vocabulary and sentence format;
+substitute scene entity names into documented slots. Prefer the closest matching
+documented description instead of inventing synonyms or imposing a universal
+shortening rule. Documented door(s) wording is valid; select singular or plural
+as appropriate. Keep reasoning and completion criteria outside policy language.
+Never silently rewrite an explicit operator instruction.
 '''
 
 
@@ -286,19 +294,44 @@ class Supervisor:
 
         grounding = None
         boundary_review = None
+        completion_confirmation = None
         use_sam = context.get('use_sam', self.use_sam)
         if type(use_sam) is not bool:
             raise ValueError('use_sam must be a boolean')
         review_enabled = context.get('boundary_review_enabled', False)
         if type(review_enabled) is not bool:
             raise ValueError('boundary_review_enabled must be a boolean')
+        review_context = {key: context[key] for key in (
+            'step', 'next_step', 'original_goal', 'observation_step', 'before_observation_step', 'observation_refs',
+            'temporal_observations', 'depth_observations', 'robot_measurements', 'last_motion') if key in context}
+
+        def confirm_completion(assessment):
+            nonlocal completion_confirmation
+            if remaining - len(audit) < 1:
+                completion_confirmation = {'validation_error': 'No API budget remains for independent completion confirmation'}
+                return False
+            confirmation_content = [{'type': 'input_text', 'text': json.dumps({
+                'context': review_context, 'proposed_completion': assessment})}]
+            for label, frame in sorted({**images, **depth_images}.items()):
+                confirmation_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
+            confirmation, usage = api_response(self.model, confirmation_content,
+                                               instructions=CONFIRMATION_POLICY, schema=CONFIRMATION_SCHEMA)
+            audit.append({**usage, 'role': 'completion_confirmation'})
+            try:
+                completion_confirmation = validate_confirmation(confirmation, context)
+            except (ValueError, KeyError, TypeError) as error:
+                completion_confirmation = {'validation_error': str(error)}
+                return False
+            return completion_confirmation['verdict'] == 'confirmed'
+
+        def confirmed_result(assessment):
+            return boundary_completion({**assessment, 'evidence': completion_confirmation['evidence'],
+                                        'observation_refs': completion_confirmation['observation_refs']})
+
         if (review_enabled and operation == 'decide' and remaining >= 2
                 and context.get('observation_step', 0) > 0 and not context.get('planning_window_exhausted', False)):
             # Independent perception pass: exclude planner beliefs, ledger status,
             # failure history, catalogs and proposed motor instructions.
-            review_context = {key: context[key] for key in (
-                'step', 'observation_step', 'before_observation_step', 'observation_refs',
-                'temporal_observations', 'depth_observations', 'robot_measurements', 'last_motion') if key in context}
             review_content = [{'type': 'input_text', 'text': json.dumps(review_context)}]
             for label, frame in sorted({**images, **depth_images}.items()):
                 review_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
@@ -312,8 +345,12 @@ class Supervisor:
             else:
                 boundary_review = {'assessment': reviewed}
                 if reviewed['outcome'] == 'satisfied':
-                    return {'result': boundary_completion(reviewed), 'api_calls': len(audit), 'audit': audit,
+                    accepted = confirm_completion(reviewed)
+                    result = confirmed_result(reviewed) if accepted else unconfirmed_boundary(
+                        reviewed, 'Stage completion is not confirmed: ' + json.dumps(completion_confirmation))
+                    return {'result': result, 'api_calls': len(audit), 'audit': audit,
                             'sam': None, 'boundary_review': boundary_review,
+                            'completion_confirmation': completion_confirmation,
                             'received_image_diagnostics': diagnostics, 'validation_error': None}
         if use_sam and operation == 'decide' and remaining - len(audit) >= 2:
             query = context.get('perception_query') or {}
@@ -368,7 +405,7 @@ class Supervisor:
                 result = normalize_plan_cameras(result, current_cameras)
                 validate_grounded_plan(result, current_cameras)
                 if context.get('working_context_version') == 2:
-                    self.instruction_grounder.validate_plan(result['steps'])
+                    self.instruction_grounder.validate_generated_plan(result['steps'])
             except (ValueError, KeyError, TypeError) as error:
                 validation_error = str(error)
         else:
@@ -377,12 +414,14 @@ class Supervisor:
                                   context['capabilities'].get('move_vertical', False))
                 if context.get('working_context_version') == 2:
                     if result['status'] == 'replan':
-                        self.instruction_grounder.validate_plan(result['replacement_steps'])
+                        self.instruction_grounder.validate_generated_plan(
+                            result['replacement_steps'], committed_instruction=context['step']['instruction'])
                     elif result['status'] == 'continue':
                         for name, arguments in parse_program(result['program'], context['decision_step_limit']):
                             instruction = (arguments['instruction'] if name == 'run_groot' else
                                            f'Navigate to the {arguments["fixture"]}.')
-                            self.instruction_grounder.validate(instruction)
+                            self.instruction_grounder.validate_generated(
+                                instruction, committed_instruction=context['step']['instruction'])
                 if context.get('instruction_style') == 'single_stage' and result['status'] == 'continue':
                     commands = parse_program(result['program'], context['decision_step_limit'])
                     validate_stage_program(commands)
@@ -401,8 +440,15 @@ class Supervisor:
                 # usage/audit and let the runner reject without motion, then feed
                 # the reason into the next budgeted decision.
                 validation_error = str(error)
+        if (review_enabled and operation == 'decide' and not validation_error
+                and result.get('assessment', {}).get('outcome') == 'satisfied'
+                and not context.get('planning_window_exhausted', False)):
+            accepted = confirm_completion(result['assessment'])
+            result = confirmed_result(result['assessment']) if accepted else unconfirmed_boundary(
+                result['assessment'], 'Stage completion is not confirmed: ' + json.dumps(completion_confirmation))
         return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
                 'boundary_review': boundary_review,
+                'completion_confirmation': completion_confirmation,
                 'received_image_diagnostics': diagnostics, 'validation_error': validation_error}
 
 

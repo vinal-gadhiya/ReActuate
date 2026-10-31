@@ -46,6 +46,7 @@ class AtomicLanguageTests(unittest.TestCase):
             instruction = instruction.replace('(s)', 's')
             with self.subTest(task=task['name']):
                 self.assertTrue(self.grounder.validate(instruction)['source_tasks'])
+                self.assertTrue(self.grounder.validate_generated(instruction)['source_tasks'])
         for instruction in ('Press the start button on the microwave.',
                             'Fully slide the oven rack out.',
                             'Increase the toaster oven temperature.',
@@ -68,6 +69,33 @@ class AtomicLanguageTests(unittest.TestCase):
         catalog['instruction_forms'][0]['source_tasks'] = ['InventedAtomicTask']
         with self.assertRaises(ValueError):
             AtomicInstructionGrounder(catalog)
+
+    def test_generated_commands_accept_documented_panel_vocabulary_without_rewriting(self):
+        for fixture in ('fridge', 'cabinet'):
+            for verb in ('Open', 'Close'):
+                whole, part = f'{verb} the {fixture}.', f'{verb} the {fixture} door.'
+                self.grounder.validate_generated(whole)
+                self.grounder.validate_generated(part)
+                self.grounder.validate_generated(f'{verb} the {fixture} doors.')
+                self.grounder.validate_generated(part, committed_instruction=part)
+        # The documented format supports additional scene fixtures.
+        catalog = deepcopy(load_atomic_task_catalog())
+        for task in catalog['tasks']:
+            if task['description'] == 'Open the cabinet door(s).':
+                task['description'] = 'Open the pantry door(s).'
+        AtomicInstructionGrounder(catalog).validate_generated('Open the pantry door.')
+
+    def test_runner_preserves_catalog_grounded_instruction_text(self):
+        for committed in ('Open the fridge.', 'Open the fridge door.', 'Open the cabinet doors.'):
+            replies = [decision(program=f'run_groot(instruction={committed!r}, steps=4)')]
+            replies.append(decision('stop', ''))
+            responses, tools, events = iter(replies), FakeTools(), []
+            with self.subTest(committed=committed):
+                run_subtasks(tools, [step('open', committed)], 'agent', lambda *args: next(responses),
+                             events.append, instruction_grounder=self.grounder)
+                self.assertEqual(tools.instructions, [committed])
+                self.assertEqual(tools.steps, 4)
+                self.assertFalse(any(event['event'] == 'invalid_decision' for event in events))
 
     def test_composite_skill_hints_reserve_atomic_references_and_current_atomic_is_retained(self):
         catalog = load_atomic_task_catalog()
