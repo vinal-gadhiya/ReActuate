@@ -9,9 +9,57 @@ from unittest.mock import patch
 from urllib.error import URLError
 
 from sim.compare import check_services, episode_metrics, run_command, summarize
+from sim.compare import main
 
 
 class CompareTests(unittest.TestCase):
+    def test_paired_regressions_and_all_attempted_rates_include_operational_errors(self):
+        rows = []
+        for seed, baseline, agent in ((0, True, False), (1, False, True), (2, True, True), (3, False, False)):
+            for condition, success in (('baseline', baseline), ('muse', agent)):
+                rows.append({'task': 'TaskFamilyA', 'seed': seed, 'condition': condition, 'success': success,
+                             'status': 'completed', 'scene_identity': {'seed': seed}, 'original_goal': 'Original',
+                             'steps': 20, 'wall_seconds': 1, 'api_calls': 1, 'sam_calls': 0})
+        rows.append({'task': 'TaskFamilyA', 'seed': 4, 'condition': 'muse', 'status': 'error', 'error_category': 'infrastructure'})
+        report = summarize(rows, ('baseline', 'muse'))
+        metrics = report['conditions']['muse']
+        self.assertEqual(metrics['completed_rollout_success_rate'], 0.5)
+        self.assertEqual(metrics['all_attempted_success_rate'], 0.4)
+        outcomes = report['paired_outcomes']['muse']
+        for key in ('both_succeed', 'both_fail', 'agent_improvement', 'baseline_success_regression'):
+            self.assertEqual(outcomes[key], 1)
+        self.assertEqual(outcomes['baseline_success_regression_rate'], 0.5)
+
+    def test_comparison_continues_to_later_seed_after_child_failure(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'suite'
+
+            def child(command, log, env):
+                seed = int(command[command.index('--seed') + 1])
+                condition = command[command.index('--mode') + 1]
+                calls.append((seed, condition))
+                if seed == 0:
+                    return 1
+                episode = Path(command[command.index('--output') + 1]) / 'episode-000'
+                episode.mkdir(parents=True)
+                (episode / 'scene.json').write_text('{}')
+                (episode / 'trace.jsonl').write_text('')
+                (episode / 'plan.json').write_text('{}')
+                (episode / 'result.json').write_text(json.dumps({
+                    'task': 'ExampleTask', 'seed': seed, 'success': True, 'original_goal': 'Original',
+                    'scene_identity': {'seed': seed}, 'steps': 1, 'wall_seconds': 1, 'api_calls': 0}))
+                return 0
+
+            argv = ['compare', '--task', 'ExampleTask', '--seeds', '0', '1', '--conditions', 'baseline', 'muse', '--output', str(output)]
+            with patch('sys.argv', argv), patch('sim.compare.check_services'), patch('sim.compare.run_child', side_effect=child):
+                main()
+            report = json.loads((output / 'comparison.json').read_text())
+            self.assertEqual(calls, [(0, 'baseline'), (1, 'baseline'), (1, 'agent')])
+            self.assertEqual(report['conditions']['baseline']['errors'], 1)
+            self.assertEqual(report['conditions']['muse']['skipped'], 1)
+            self.assertEqual(report['conditions']['muse']['completed'], 1)
+
     def test_missing_supervisor_fails_preflight_with_startup_instructions(self):
         with patch('sim.compare.PolicyClient.metadata', return_value={'protocol_version': 1}), \
                 patch('sim.compare.SupervisorClient.metadata', side_effect=URLError('name resolution failed')):

@@ -4,6 +4,7 @@ from copy import deepcopy
 import re
 
 from core.agent import PLAN_SCHEMA, validate_plan
+from core.goals import REQUIREMENT_SCHEMA, GoalLedger
 
 
 def record(properties):
@@ -28,6 +29,7 @@ SURVEY_SCHEMA = record({
 })
 GROUNDED_PLAN_SCHEMA = record({
     'scene_assessment': SURVEY_SCHEMA,
+    'requirements': {'type': 'array', 'items': REQUIREMENT_SCHEMA},
     'steps': deepcopy(PLAN_SCHEMA['properties']['steps']),
 })
 
@@ -138,19 +140,24 @@ def validate_scene_assessment(survey, cameras=None):
 
 
 def validate_grounded_plan(result, cameras):
-    if not isinstance(result, dict) or set(result) != {'scene_assessment', 'steps'}:
+    if not isinstance(result, dict) or set(result) not in ({'scene_assessment', 'steps'}, {'scene_assessment', 'requirements', 'steps'}):
         raise ValueError('Generated plan requires scene_assessment and steps')
     validate_scene_assessment(result['scene_assessment'], cameras)
+    if 'requirements' in result:
+        GoalLedger('', result['requirements']).validate_window(result['steps'])
     return validate_plan({'steps': result['steps']})
 
 
 def load_plan(value):
     """Accept legacy operator plans and new plans carrying a visual survey."""
-    if not isinstance(value, dict) or set(value) not in ({'steps'}, {'steps', 'scene_assessment'}):
+    if (not isinstance(value, dict) or 'steps' not in value
+            or set(value) - {'steps', 'scene_assessment', 'requirements'}):
         raise ValueError('Invalid saved plan fields')
     survey = value.get('scene_assessment')
     if survey is not None:
         validate_scene_assessment(survey)
+    if 'requirements' in value:
+        GoalLedger('', value['requirements']).validate_window(value['steps'])
     return validate_plan({'steps': value['steps']}), deepcopy(survey)
 
 

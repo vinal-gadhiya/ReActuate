@@ -4,6 +4,7 @@ import ast
 import math
 import re
 from core.scene_memory import ASSESSMENT_SCHEMA, MEMORY_ENTRY_SCHEMA, PERCEPTION_SCHEMA, validate_scene_fields
+from core.goals import ACTION_SCHEMA, GOAL_UPDATE_SCHEMA, ATTEMPT_REPORT_SCHEMA, RECOVERY_SCHEMA
 
 STEP_PROPERTIES = {
     'id': {'type': 'string'},
@@ -11,6 +12,7 @@ STEP_PROPERTIES = {
     'target': {'type': 'string'},
     'success_criteria': {'type': 'string'},
     'max_steps': {'type': 'integer'},
+    'goal_ids': {'type': 'array', 'items': {'type': 'string'}},
 }
 STEP_SCHEMA = {
     'type': 'object', 'properties': STEP_PROPERTIES,
@@ -30,6 +32,10 @@ DECISION_SCHEMA = {
         'assessment': ASSESSMENT_SCHEMA,
         'memory_updates': {'type': 'array', 'items': MEMORY_ENTRY_SCHEMA},
         'perception': PERCEPTION_SCHEMA,
+        'goal_updates': {'type': 'array', 'items': GOAL_UPDATE_SCHEMA},
+        'attempt_reports': {'type': 'array', 'items': ATTEMPT_REPORT_SCHEMA},
+        'action': {'anyOf': [ACTION_SCHEMA, {'type': 'null'}]},
+        'recovery': {'anyOf': [RECOVERY_SCHEMA, {'type': 'null'}]},
         'handoff': {
             'type': 'object',
             'properties': {
@@ -42,6 +48,9 @@ DECISION_SCHEMA = {
     'required': ['status', 'evidence', 'program', 'replacement_steps', 'handoff', 'assessment', 'memory_updates', 'perception'],
     'additionalProperties': False,
 }
+DECISION_SCHEMA['required'] = list(DECISION_SCHEMA['properties'])
+LEGACY_STEP_FIELDS = set(STEP_PROPERTIES) - {'goal_ids'}
+LEGACY_DECISION_FIELDS = set(DECISION_SCHEMA['properties']) - {'goal_updates', 'attempt_reports', 'action', 'recovery'}
 
 
 def validate_plan(plan):
@@ -52,7 +61,7 @@ def validate_plan(plan):
         raise ValueError('A plan needs 1–10 short subtasks')
     identifiers = set()
     for step in steps:
-        if not isinstance(step, dict) or set(step) != set(STEP_PROPERTIES):
+        if not isinstance(step, dict) or set(step) not in (set(STEP_PROPERTIES), LEGACY_STEP_FIELDS):
             raise ValueError('Invalid subtask fields')
         for key in ('id', 'instruction', 'target', 'success_criteria'):
             if not isinstance(step[key], str) or not 0 < len(step[key].strip()) <= 1000:
@@ -62,6 +71,10 @@ def validate_plan(plan):
         identifiers.add(step['id'])
         if type(step['max_steps']) is not int or not 1 <= step['max_steps'] <= 1000:
             raise ValueError('Subtask step budget must be 1–1000')
+        if 'goal_ids' in step and (not isinstance(step['goal_ids'], list) or not step['goal_ids']
+                                  or any(not isinstance(item, str) or not item.strip() for item in step['goal_ids'])
+                                  or len(step['goal_ids']) != len(set(step['goal_ids']))):
+            raise ValueError('Execution stages need nonempty unique goal_ids')
     return steps
 
 
@@ -130,46 +143,23 @@ def parse_program(source, max_steps=80, allow_gripper=False, allow_vertical=Fals
     return commands
 
 
-def normalize_navigation_commands(commands):
-    """Route simple Navigate-to language through the same guarded navigation tool."""
-    result = []
-    for name, arguments in commands:
-        if name == 'run_groot' and re.match(r'^\s*navigate\b', arguments['instruction'], re.IGNORECASE):
-            match = re.fullmatch(r'\s*navigate\s+to\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 -]*?)\.?\s*',
-                                 arguments['instruction'], re.IGNORECASE)
-            if match is None:
-                raise ValueError('Use navigate(fixture=..., steps=...) or a simple Navigate to the named fixture instruction')
-            result.append(('navigate', {'fixture': match[1].strip(), 'steps': arguments['steps']}))
-        else:
-            result.append((name, dict(arguments)))
-    return result
+def navigation_fixture(name, arguments):
+    """Identify navigation for accounting without changing the policy instruction."""
+    if name == 'navigate':
+        return arguments['fixture']
+    if name != 'run_groot' or not re.match(r'^\s*navigate\b', arguments['instruction'], re.IGNORECASE):
+        return None
+    match = re.fullmatch(r'\s*navigate\s+to\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 -]*?)\.?\s*',
+                         arguments['instruction'], re.IGNORECASE)
+    if match is None:
+        raise ValueError('Use one simple instruction: Navigate to the <location>.')
+    return match[1].strip()
 
 
 def validate_stage_program(commands):
-    """Agent-only language contract; never rewrite policy actions or baseline text."""
+    """Structural boundary only. Conciseness and wording are policy guidance."""
     if len(commands) != 1:
         raise ValueError('Execute one simple stage per decision, then observe before the next stage')
-    name, arguments = commands[0]
-    if name == 'navigate':
-        fixture = arguments['fixture'].strip()
-        if '\n' in fixture or len(fixture) > 48 or len(fixture.split()) > 4:
-            raise ValueError('Use a concise named fixture for navigation; keep location descriptions in memory')
-        return
-    if name != 'run_groot':
-        return
-    instruction = arguments['instruction'].strip()
-    if len(instruction) > 96 or len(instruction.split()) > 12:
-        raise ValueError('Use one concise action, at most 12 words and 96 characters; keep scene descriptions in memory/evidence')
-    if re.match(r'^(?:open|close)\b', instruction, re.IGNORECASE) and (
-            re.search(r'\b(?:left|right|both|one|first|second)\b.*\bdoors?\b', instruction, re.IGNORECASE)
-            or re.search(r'\bdoors?\b.*\b(?:left|right)\b', instruction, re.IGNORECASE)):
-        raise ValueError('Use the whole-fixture instruction, such as Open the fridge or Close the cabinet. '
-                         'Keep panel selection and full access/clearance requirements in success criteria and evidence.')
-    if ('\n' in instruction or ';' in instruction
-            or len([part for part in re.split(r'[.!?]', instruction) if part.strip()]) > 1 or re.search(
-            r'(?:\b(?:and|then)\b|,)\s+(?:(?:then|gently|carefully)\s+)*(?:pick|place|put|navigate|open|close|pour|turn|wash|move|bring|carry|return|switch|stir|clean)\b',
-            instruction, re.IGNORECASE)):
-        raise ValueError('Separate pickup, placement, navigation and other actions into distinct stages with observations between them')
 
 
 def validate_placement_destination(commands, planned_instruction):
@@ -196,7 +186,7 @@ def validate_placement_destination(commands, planned_instruction):
 
 
 def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertical=False):
-    if not isinstance(decision, dict) or set(decision) != set(DECISION_SCHEMA['properties']):
+    if not isinstance(decision, dict) or set(decision) not in (set(DECISION_SCHEMA['properties']), LEGACY_DECISION_FIELDS):
         raise ValueError('Invalid decision fields')
     status = decision['status']
     if status not in ('continue', 'complete', 'replan', 'stop', 'inspect'):
@@ -206,6 +196,11 @@ def validate_decision(decision, max_steps=80, allow_gripper=False, allow_vertica
     if not isinstance(decision['program'], str) or not isinstance(decision['replacement_steps'], list):
         raise ValueError('Invalid program or replacement plan')
     validate_scene_fields(decision)
+    if set(decision) == set(DECISION_SCHEMA['properties']):
+        if not isinstance(decision['goal_updates'], list) or not isinstance(decision['attempt_reports'], list):
+            raise ValueError('Goal updates and attempt reports must be arrays')
+        if status == 'continue' and decision['action'] is None:
+            raise ValueError('Executable actions need semantic metadata and explicit goal references on their stage')
     handoff = decision['handoff']
     if (not isinstance(handoff, dict) or set(handoff) != {'readiness', 'evidence'}
             or handoff['readiness'] not in ('ready', 'blocked', 'uncertain', 'not_applicable')

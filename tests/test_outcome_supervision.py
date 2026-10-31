@@ -115,7 +115,7 @@ class OutcomeSupervisionTests(unittest.TestCase):
         self.assertEqual(len(journal.execution_feedback()['instruction_attempts']), 1)
         self.assertEqual(EpisodeContext().execution_feedback()['instruction_attempts'], [])
 
-    def test_feedback_reaches_supervisor_without_an_extra_api_call_or_new_output_contract(self):
+    def test_legacy_feedback_stays_in_audit_without_extra_api_calls(self):
         journal, requests = EpisodeContext(), []
         self.record_decision(journal, 0)
         self.record_execution(journal, 0, 16)
@@ -133,10 +133,11 @@ class OutcomeSupervisionTests(unittest.TestCase):
         }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
         self.assertEqual(response['api_calls'], 1)
         self.assertEqual(len(requests), 1)
-        sent = requests[0][0]['context']['execution_feedback']
-        self.assertEqual(sent['instruction_attempts'][0]['executed_steps'], 16)
-        self.assertFalse(sent['recent_outcome_reviews'][0]['assessment_changed'])
-        self.assertIn('GROUNDED CORRECTIONS', requests[0][1])
+        self.assertNotIn('execution_feedback', requests[0][0]['context'])
+        audit = journal.execution_feedback()
+        self.assertEqual(audit['instruction_attempts'][0]['executed_steps'], 16)
+        self.assertFalse(audit['recent_outcome_reviews'][0]['assessment_changed'])
+        self.assertIn('Repeated supported goal failures', requests[0][1])
         self.assertEqual(response['result']['status'], 'stop')
 
 

@@ -169,9 +169,9 @@ class EpisodeContextTests(unittest.TestCase):
             'control_owner': 'patchwam', 'episode_context': journal.context(32),
         }, {'current:camera': np.zeros((4, 6, 3), np.uint8)})
         self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0][0]['context']['episode_context']['original_goal'], 'Arrange tea')
-        self.assertIn('episode-local notebook', requests[0][1])
-        self.assertIn('selected PatchWAM policy', requests[0][1])
+        self.assertEqual(requests[0][0]['context']['original_goal'], 'Arrange tea')
+        self.assertNotIn('episode_context', requests[0][0]['context'])
+        self.assertIn('Backend: patchwam', requests[0][1])
 
 
 if __name__ == '__main__':

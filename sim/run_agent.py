@@ -11,11 +11,14 @@ import uuid
 import numpy as np
 
 from core.agent import (parse_program, validate_decision, validate_stage_program,
-                        validate_placement_destination, normalize_navigation_commands)
+                        validate_placement_destination, navigation_fixture)
 from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
-from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError
+from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError, PolicyHTTPError
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
+from core.goals import GoalLedger, AttemptHistory
+from core.instructions import PolicyInstructionAdapter
+from copy import deepcopy
 from core.episode_context import EpisodeContext
 from core.observations import check_rgb
 from core.depth import supervisor_depth_views
@@ -202,7 +205,8 @@ def handoff_context(plan, index, history):
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=None, stall_bursts=4,
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
-                 concise_instructions=False, max_stop_continuations=None):
+                 concise_instructions=False, max_stop_continuations=None,
+                 goal_ledger=None, attempt_history=None, instruction_adapter=None):
     if supervisor_stop_policy not in ('halt', 'continue'):
         raise ValueError('Unknown supervisor stop policy')
     if max_supervisor_failures < 0:
@@ -213,11 +217,18 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         raise ValueError('Navigation burst limit must be nonnegative or None')
     index, spent, decisions, replans, rejected = 0, 0, 0, 0, 0
     last_transfer = None
+    last_action = None
     supervisor_failures = 0
     invalid_decisions = 0
     last_inspection, repeated_inspections = None, 0
     consecutive_stop_continuations = 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
+    ledger = goal_ledger
+    attempts = attempt_history if attempt_history is not None else (AttemptHistory(ledger) if ledger is not None else None)
+    adapter = instruction_adapter or PolicyInstructionAdapter('gr00t')
+    window_exhausted = False
+    if ledger is not None:
+        ledger.validate_window(plan)
     while not tools.done and index < len(plan):
         supervisor_unavailable = False
         step = plan[index]
@@ -264,6 +275,21 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 if not supervisor_unavailable:
                     validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
                                       getattr(tools, 'allow_vertical', False))
+                    if ledger is not None:
+                        if 'outcome' not in decision['assessment']:
+                            raise ValueError('Ledger mode requires a universal outcome assessment')
+                        candidate = deepcopy(ledger)
+                        candidate.validate_refs(decision['assessment']['observation_refs'], tools.steps)
+                        candidate.apply_updates(decision['goal_updates'], tools.steps)
+                        candidate_attempts = deepcopy(attempts)
+                        candidate_attempts.ledger = candidate
+                        candidate_attempts.review(decision['attempt_reports'], tools.steps)
+                        if decision['status'] == 'complete' and decision['assessment']['outcome'] != 'satisfied':
+                            raise ValueError('Stage completion needs a supported satisfied outcome')
+                        ledger.requirements, ledger.history = candidate.requirements, candidate.history
+                        attempts.attempts = candidate_attempts.attempts
+                        record({'event': 'goal_state', 'step': tools.steps, 'ledger': ledger.context(),
+                                'attempt_history': attempts.context(step['goal_ids'])})
             except (ValueError, KeyError, SyntaxError, TypeError) as error:
                 invalid_decisions += 1
                 record({'event': 'invalid_decision', 'step': tools.steps, 'reason': str(error),
@@ -278,6 +304,10 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'scene_memory', 'step': tools.steps, 'memory': memory.context()})
         record({'event': 'supervisor_failure_continuation' if supervisor_unavailable else 'decision',
                 'subtask': step['id'], 'step': tools.steps, **decision})
+        if ledger is not None and not supervisor_unavailable and not ledger.pending():
+            record({'event': 'requirements_reported_satisfied', 'step': tools.steps,
+                    'reason': 'All original requirements have supported visual claims; no extra cleanup is required.'})
+            return 'requirements_reported_satisfied'
         transport = getattr(tools, 'transport_control', None)
         if transport is not None and mode == 'agent':
             if not supervisor_unavailable:
@@ -303,7 +333,9 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     'reason': decision['evidence'], 'remaining_steps': remaining,
                     'instruction': instruction, 'steps': burst,
                     'note': 'Simulator continuation mode; control guards and execution budgets still apply.'})
-            decision = {**decision, 'program': f'run_groot(instruction={instruction!r}, steps={burst})'}
+            decision = {**decision, 'program': f'run_groot(instruction={instruction!r}, steps={burst})',
+                        'action': deepcopy(last_action)} if ledger is not None else {
+                            **decision, 'program': f'run_groot(instruction={instruction!r}, steps={burst})'}
         else:
             consecutive_stop_continuations = 0
         if status == 'inspect':
@@ -316,6 +348,10 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 tools.refresh_observation()
             continue
         if status == 'complete':
+            if window_exhausted:
+                record({'event': 'recovery_required', 'step': tools.steps,
+                        'reason': 'This action window is already complete. Replan for persistent pending requirements or stop.'})
+                continue
             if mode == 'agent' and index + 1 < len(plan) and decision['handoff']['readiness'] != 'ready':
                 record({'event': 'transition_blocked', 'subtask': step['id'],
                         'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
@@ -326,49 +362,81 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'subtask_transition', 'subtask': step['id'],
                         'completed_step': dict(step), 'step': tools.steps,
                         'completion_evidence': decision['evidence'], 'handoff': decision['handoff']})
+            if ledger is not None and index + 1 == len(plan) and ledger.pending():
+                window_exhausted = True
+                record({'event': 'planning_window_exhausted', 'step': tools.steps,
+                        'pending_goal_ids': ledger.pending(),
+                        'reason': 'Extend the short action window. Original requirements remain pending in the ledger.'})
+                continue
             index, spent = index + 1, 0
             continue
         if status == 'replan':
-            if replans >= max_replans:
+            if not window_exhausted and replans >= max_replans:
                 return 'replan_budget'
             replacement = decision['replacement_steps']
-            completed_ids = {item['id'] for item in plan[:index]}
+            prefix = plan[:index + 1] if window_exhausted else plan[:index]
+            completed_ids = {item['id'] for item in prefix}
             if completed_ids & {item['id'] for item in replacement}:
-                raise ValueError('Replan reused a completed subtask ID')
-            plan = plan[:index] + replacement
+                record({'event': 'recovery_required', 'step': tools.steps, 'reason': 'Replan reused a completed stage ID'})
+                continue
+            if ledger is not None:
+                try:
+                    ledger.validate_window(replacement)
+                except ValueError as error:
+                    record({'event': 'recovery_required', 'step': tools.steps, 'reason': str(error)})
+                    continue
+            extension = window_exhausted
+            plan = prefix + replacement
+            index = len(prefix)
             record({'event': 'plan_replaced', 'subtask': step['id'], 'step': tools.steps,
-                    'steps': [dict(item) for item in plan], 'reason': decision['evidence']})
-            replans, spent = replans + 1, 0
+                    'steps': [dict(item) for item in plan], 'reason': decision['evidence'],
+                    'kind': 'window_extension' if extension else 'recovery'})
+            replans, spent = replans + int(not extension), 0
+            window_exhausted = False
             continue
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
                                  getattr(tools, 'allow_vertical', False))
+        recovery_authorization = None
         try:
+            if window_exhausted:
+                raise ValueError('Action window complete: replan for pending requirements before executing more work')
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
-            if mode == 'agent':
-                normalized = normalize_navigation_commands(commands)
-                if normalized != commands:
-                    record({'event': 'navigation_normalized', 'step': tools.steps, 'subtask': step['id'],
-                            'reason': 'Equivalent Navigate-to language routed through guarded navigation.',
-                            'original_program': decision['program'], 'commands': normalized})
-                commands = normalized
-            if mode == 'agent' and concise_instructions:
+                if ledger is None:
+                    validate_placement_destination(commands, step['instruction'])
+                    memory.authorize_placement_stage(commands)
+            if ledger is not None:
+                ledger.validate_stage(step)
                 validate_stage_program(commands)
-                validate_placement_destination(commands, step['instruction'])
-                memory.authorize_placement_stage(commands)
+                for name, arguments in commands:
+                    if not supervisor_unavailable:
+                        adapter.validate_command(decision['action'], name, arguments)
+                    recovery_authorization = attempts.authorize(
+                        step['goal_ids'], name, arguments, decision.get('recovery'), tools.steps)
             if transport is not None:
                 transport.authorize_program(commands)
-            navigation_count = sum(name == 'navigate' for name, _ in commands)
+            if ledger is not None and not supervisor_unavailable:
+                action = decision['action']
+                destination = action['destination'] or action['object']
+                navigation_targets = [destination if action['intent'].strip().casefold() == 'navigate' else None]
+                if navigation_targets[0] == '':
+                    raise ValueError('Navigation semantic action needs a named destination')
+            else:
+                navigation_targets = ([navigation_fixture(name, arguments) for name, arguments in commands]
+                                      if mode == 'agent' else [None] * len(commands))
+            navigation_count = sum(target is not None for target in navigation_targets)
             if (mode == 'agent' and max_navigation_bursts is not None
                     and memory.navigation_bursts + navigation_count > max_navigation_bursts):
                 raise ValueError('Navigation burst budget exhausted')
-            for name, arguments in commands:
+            for (name, arguments), fixture in zip(commands, navigation_targets):
                 if transport is not None:
                     transport.authorize(name, arguments)
                     if name == 'move_vertical' and abs(arguments['distance']) / arguments['steps'] > 0.002 + 1e-9:
                         raise ValueError('Use at least one control step per 2 mm of vertical motion')
-                if name == 'navigate':
-                    memory.authorize_navigation(arguments['fixture'], max_navigation_bursts)
+                if fixture is not None:
+                    if concise_instructions:
+                        validate_stage_program([('navigate', {'fixture': fixture, 'steps': arguments['steps']})])
+                    memory.authorize_navigation(fixture, max_navigation_bursts)
                 if (mode == 'agent' and stall_bursts and memory.stall_streak >= stall_bursts
                         and name == 'run_groot' and arguments['instruction'] == memory.last_instruction):
                     raise ValueError('Stationary policy: choose information gathering, a distinct supported recovery, or stop')
@@ -383,7 +451,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                        else decision_steps)
         if transport is not None and transport.held_object:
             motion_left = min(motion_left, 16)
-        for name, arguments in commands:
+        for (name, arguments), fixture in zip(commands, navigation_targets):
             if motion_left <= 0:
                 break
             if arguments['steps'] > motion_left:
@@ -395,8 +463,12 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 arguments = {**arguments, 'steps': motion_left}
             before = tools.steps
             getattr(tools, name)(**arguments)
+            attempt = (attempts.record(step['goal_ids'], name, arguments, decision.get('action'),
+                                       before, tools.steps, recovery_authorization) if ledger is not None else None)
             if name == 'run_groot' and tools.steps > before:
                 last_transfer = (step['id'], arguments['instruction'])
+                if not supervisor_unavailable:
+                    last_action = deepcopy(decision.get('action'))
             elif name == 'set_gripper' and not arguments['closed']:
                 # A release changes the transfer state; do not replay its old
                 # acquisition/placement instruction during an outage.
@@ -405,14 +477,17 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 diagnostics = getattr(tools, 'last_diagnostics', {})
                 instruction = arguments.get('instruction', f'Navigate to the {arguments.get("fixture", "")}.')
                 memory.note_motion(instruction, diagnostics)
-                if name == 'navigate':
+                if fixture is not None:
                     memory.navigation_bursts += 1
-                    memory.last_navigation = arguments['fixture'].casefold().strip()
+                    memory.last_navigation = fixture.casefold().strip()
             spent += tools.steps - before
             motion_left -= tools.steps - before
             record({'event': 'tool', 'subtask': step['id'], 'tool': name, 'arguments': arguments,
+                    'policy_instruction': (arguments['instruction'] if name == 'run_groot' else
+                                           f'Navigate to the {arguments["fixture"]}.' if name == 'navigate' else None),
                     'step_before': before, 'step_after': tools.steps,
-                    **({'navigation_source': memory.navigation_source(arguments['fixture'])} if name == 'navigate' else {}),
+                    **({'attempt': attempt} if attempt is not None else {}),
+                    **({'navigation_source': memory.navigation_source(fixture)} if fixture is not None else {}),
                     'diagnostics': getattr(tools, 'last_diagnostics', {}),
                     **({'transport_control': transport.context()} if transport is not None else {})})
             if mode == 'agent':
@@ -445,6 +520,9 @@ def main():
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
     parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-goal-failures', type=int, default=3,
+                        help='Supported unsuccessful outcomes before requiring a changed recovery')
+    parser.add_argument('--max-goal-recoveries', type=int, default=2)
     parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
                         help='Agent context: persistent event/plan summary plus recent history, or recent history only (object memory stays enabled)')
     parser.add_argument('--max-supervisor-failures', type=int, default=3,
@@ -494,10 +572,14 @@ def main():
         parser.error('--depth requires agent mode')
     if not np.isfinite(args.depth_max_metres) or args.depth_max_metres <= 0:
         parser.error('--depth-max-metres must be finite and positive')
-    starting_plan, starting_scene_assessment = None, None
+    if args.max_goal_failures < 1 or args.max_goal_recoveries < 0:
+        parser.error('Goal failure limit must be positive and goal recovery limit nonnegative')
+    starting_plan, starting_scene_assessment, starting_requirements = None, None, None
     operator_context = load_operator_context(args.context_file)
     if args.plan:
-        starting_plan, starting_scene_assessment = load_plan(json.loads(args.plan.read_text()))
+        saved = json.loads(args.plan.read_text())
+        starting_plan, starting_scene_assessment = load_plan(saved)
+        starting_requirements = saved.get('requirements')
 
     ensure_hash_seed(args.seed)
     seed_process(args.seed)
@@ -540,8 +622,13 @@ def main():
         history = []
         memory = SceneMemory()
         episode_context = EpisodeContext()
+        ledger, attempts = None, None
 
         def record(event):
+            if event['event'] == 'goal_state' or (event['event'] == 'tool' and ledger is not None):
+                (directory / 'goal_ledger.json').write_text(json.dumps(ledger.context(), indent=2) + '\n')
+                (directory / 'attempt_history.json').write_text(json.dumps(
+                    {'attempts': attempts.attempts, 'recoveries': attempts.recoveries}, indent=2) + '\n')
             if event['event'] in ('decision', 'supervisor_failure_continuation') and event.get('program'):
                 filename = f'program-{len(history):03d}.py'
                 (directory / filename).write_text(event['program'] + '\n')
@@ -555,7 +642,7 @@ def main():
                     json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -594,6 +681,8 @@ def main():
                 if api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
+                if ledger is not None:
+                    ledger.observe(tools.steps, current)
                 images = dict(current)
                 if previous_images is not None and operation == 'decide':
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
@@ -635,7 +724,12 @@ def main():
                 calls_left = args.max_api_calls - api_calls
                 motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
                 context.update({
+                    'working_context_version': 2,
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
+                    'goal_ledger': ledger.context() if ledger is not None else None,
+                    'attempt_history': attempts.context(context.get('step', {}).get('goal_ids', [])) if attempts is not None else None,
+                    'recovery_feedback': [item for item in history if item['event'] in (
+                        'recovery_required', 'invalid_decision', 'planning_window_exhausted')][-3:],
                     'depth_observations': depth_context,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
@@ -643,12 +737,16 @@ def main():
                     'scene_assessment_source': scene_assessment_source,
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
+                    'before_observation_step': previous_observation_step if operation == 'decide' else None,
+                    'observation_refs': [{'step': tools.steps, 'camera': key} for key in current] + (
+                        [{'step': previous_observation_step, 'camera': key} for key in previous_images]
+                        if previous_images is not None and operation == 'decide' else []),
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': (None if args.max_navigation_bursts is None else
                                                max(0, args.max_navigation_bursts - memory.navigation_bursts)),
                     'navigation_budget_mode': 'episode' if args.max_navigation_bursts is None else 'burst_cap',
                     'replans_left': max(0, args.max_replans - sum(
-                        item['event'] == 'decision' and item.get('status') == 'replan' for item in history)),
+                        item['event'] == 'plan_replaced' and item.get('kind') != 'window_extension' for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'recent_motion': [{
                         'tool': item['tool'], 'step_before': item['step_before'], 'step_after': item['step_after'],
@@ -743,12 +841,13 @@ def main():
                 if args.mode == 'baseline':
                     plan = [{'id': 'original', 'instruction': goal, 'target': 'task objects',
                              'success_criteria': 'Complete the original task', 'max_steps': max_steps}]
-                elif starting_plan is not None:
+                elif starting_plan is not None and (args.mode != 'agent' or starting_requirements is not None):
                     plan = [dict(step) for step in starting_plan]
                     initial_scene_assessment = starting_scene_assessment
                     scene_assessment_source = 'saved_plan_unverified' if initial_scene_assessment else None
                 else:
-                    generated = request_grounded_plan(ask, {'episode_horizon': max_steps},
+                    generated = request_grounded_plan(ask, {'episode_horizon': max_steps,
+                                                      'candidate_plan': starting_plan},
                                                       {f'current:{key}' for key in camera_keys})
                     plan, initial_scene_assessment = load_plan(generated)
                     scene_assessment_source = 'current_plan_visual_claim'
@@ -760,6 +859,17 @@ def main():
                         'scene_assessment': initial_scene_assessment,
                         'scene_assessment_source': scene_assessment_source})
                 saved_plan = {'steps': plan}
+                if args.mode == 'agent':
+                    requirements = starting_requirements if starting_requirements is not None else generated.get('requirements')
+                    if requirements is None:
+                        raise ValueError('Initial agent planning must extract persistent original requirements')
+                    ledger = GoalLedger(goal, requirements)
+                    ledger.validate_window(plan)
+                    ledger.observe(tools.steps, {f'current:{key}' for key in camera_keys})
+                    attempts = AttemptHistory(ledger, args.max_goal_failures, args.max_goal_recoveries)
+                    saved_plan['requirements'] = ledger.definitions()
+                    record({'event': 'goal_state', 'step': tools.steps, 'ledger': ledger.context(),
+                            'attempt_history': attempts.context()})
                 if initial_scene_assessment is not None:
                     saved_plan['scene_assessment'] = initial_scene_assessment
                     (directory / 'scene_assessment.json').write_text(json.dumps({
@@ -772,6 +882,8 @@ def main():
                         'step': active_plan[index], 'subtask_steps_used': spent,
                         'completed_steps': active_plan[:index], 'remaining_steps': active_plan[index + 1:],
                         'history': history[-8:], 'decision_step_limit': limit,
+                        'planning_window_exhausted': next((item['event'] == 'planning_window_exhausted'
+                            for item in reversed(history) if item['event'] in ('planning_window_exhausted', 'plan_replaced')), False),
                         **handoff_context(active_plan, index, history),
                         'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
                     })
@@ -786,10 +898,14 @@ def main():
                     args.max_supervisor_failures,
                     concise_instructions=True,
                     max_stop_continuations=args.max_stop_continuations,
+                    goal_ledger=ledger, attempt_history=attempts,
+                    instruction_adapter=PolicyInstructionAdapter('patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t'),
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
                     'success': tools.success, 'stop_reason': reason, 'steps': tools.steps,
+                    'failure_category': (None if tools.success else 'infrastructure' if reason == 'supervisor_failure_limit'
+                                         else 'budget' if reason.endswith('_budget') else 'controller'),
                     'api_calls': api_calls, 'wall_seconds': time.monotonic() - started,
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
@@ -809,6 +925,8 @@ def main():
         except Exception as error:
             (directory / 'error.json').write_text(json.dumps({
                 'error': str(error), 'step': tools.steps if tools is not None else 0,
+                'error_category': ('infrastructure' if isinstance(error, (OSError, RetryableSupervisorError))
+                                   or isinstance(error, PolicyHTTPError) and error.status >= 500 else 'validation_or_harness'),
                 'completed_api_calls': api_calls,
                 'note': 'A failed API request may have consumed usage not present in this count.',
                 'scene_memory': memory.context(),

@@ -21,21 +21,20 @@ class StagedInstructionTests(unittest.TestCase):
                 validate_stage_program([('run_groot', {'instruction': instruction, 'steps': 16})])
         validate_stage_program(parse_program('navigate(fixture="counter", steps=16)'))
 
-    def test_combined_or_verbose_stages_are_rejected_without_rewriting_them(self):
+    def test_language_guidance_does_not_reject_valid_executable_commands(self):
         for instruction in ('Pick up the cup and place it on the tray.',
                             'Pick up the cup. Place it on the tray.',
                             'Pick up the cup; place it on the tray.',
                             'Pick up the cup, place it on the tray.',
                             'Pick up the cup then carry it to the table.',
                             'Pick up the small white cup from the shelf above the sink beside the cabinet.'):
-            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+            with self.subTest(instruction=instruction):
                 validate_stage_program([('run_groot', {'instruction': instruction, 'steps': 16})])
         with self.assertRaises(ValueError):
             validate_stage_program(parse_program(
                 'run_groot(instruction="Pick up the cup.", steps=4)\n'
                 'run_groot(instruction="Place the cup on the tray.", steps=4)'))
-        with self.assertRaises(ValueError):
-            validate_stage_program(parse_program('navigate(fixture="the counter to the right of the large cabinet", steps=16)'))
+        validate_stage_program(parse_program('navigate(fixture="the counter to the right of the large cabinet", steps=16)'))
 
     def test_runner_observes_between_pickup_and_placement(self):
         tools, events, observed = FakeTools(), [], []
@@ -60,7 +59,7 @@ class StagedInstructionTests(unittest.TestCase):
 
     def test_rejected_combined_command_does_not_execute(self):
         tools, events = FakeTools(), []
-        replies = iter([decision(program='run_groot(instruction="Pick up the cup and place it on the table.", steps=4)'),
+        replies = iter([decision(program='run_groot(instruction="Pick up the cup.", steps=4)\nrun_groot(instruction="Place the cup on the table.", steps=4)'),
                         decision(program='run_groot(instruction="Pick up the cup.", steps=4)'),
                         decision('stop', '')])
         run_subtasks(tools, [step('pick', 'Pick up the cup.')], 'agent', lambda *args: next(replies),
@@ -95,13 +94,12 @@ class StagedInstructionTests(unittest.TestCase):
             memory.authorize_navigation(name, 6)
         memory.authorize_navigation('table', 6)
         self.assertEqual(memory.navigation_source('table'), 'policy_navigation_request')
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('cup', 6)
+        memory.authorize_navigation('new named workspace', 6)
 
-    def test_panel_specific_commands_are_rejected_but_whole_fixture_actions_remain_valid(self):
+    def test_panel_selection_is_language_guidance_not_a_structural_rejection(self):
         for instruction in ('Open the left fridge door.', 'Open the right door of the cabinet.',
                             'Close the fridge door on the left.', 'Open both fridge doors.'):
-            with self.subTest(instruction=instruction), self.assertRaisesRegex(ValueError, 'whole-fixture'):
+            with self.subTest(instruction=instruction):
                 validate_stage_program([('run_groot', {'instruction': instruction})])
         for instruction in ('Open the fridge.', 'Close the cabinet.', 'Open the left drawer.'):
             validate_stage_program([('run_groot', {'instruction': instruction})])
@@ -118,12 +116,10 @@ class StagedInstructionTests(unittest.TestCase):
         self.assertEqual(memory.navigation_source('dining counter'), 'original_task_description')
         self.assertIsNone(memory.context()['entries'][0]['last_seen_step'])
         self.assertEqual(memory.context()['entries'][0]['status'], 'uncertain')
-        with self.assertRaisesRegex(ValueError, 'task-specific destination'):
-            memory.authorize_navigation('counter', 6)
+        memory.authorize_navigation('counter', 6)
         memory.authorize_navigation('breakfast table', 6)
         self.assertEqual(memory.navigation_source('breakfast table'), 'policy_navigation_request')
-        with self.assertRaises(ValueError):
-            memory.authorize_navigation('pastry', 6)
+        memory.authorize_navigation('work station', 6)
         with self.assertRaises(ValueError):
             memory.authorize_navigation('dining counter', 0)
 

@@ -3,18 +3,28 @@
 from copy import deepcopy
 import json
 import re
+from core.goals import REFS_SCHEMA
 
 
 def record_schema(properties):
     return {'type': 'object', 'properties': properties, 'required': list(properties), 'additionalProperties': False}
 
 
-ASSESSMENT_SCHEMA = record_schema({
+TRANSPORT_SCHEMA = record_schema({
     'phase': {'type': 'string', 'enum': ['access', 'acquire', 'carry', 'locate_destination', 'place', 'recover', 'unknown']},
     'held_object': {'type': 'string'},
     'grasp': {'type': 'string', 'enum': ['supported', 'uncertain', 'empty', 'lost']},
     'destination': {'type': 'string'}, 'information_needed': {'type': 'string'}, 'evidence': {'type': 'string'},
 })
+ASSESSMENT_SCHEMA = record_schema({
+    'outcome': {'type': 'string', 'enum': ['satisfied', 'unsatisfied', 'unknown']},
+    'evidence': {'type': 'string'}, 'observation_refs': REFS_SCHEMA,
+    'transport': {'anyOf': [TRANSPORT_SCHEMA, {'type': 'null'}]},
+})
+
+
+def transport_assessment(assessment):
+    return (assessment.get('transport') or {}) if 'outcome' in assessment else assessment
 MEMORY_ENTRY_SCHEMA = record_schema({
     'name': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['object', 'fixture']},
     'location': {'type': 'string'},
@@ -29,13 +39,28 @@ PERCEPTION_SCHEMA = record_schema({
 
 def validate_scene_fields(decision):
     assessment = decision['assessment']
-    if not isinstance(assessment, dict) or set(assessment) != set(ASSESSMENT_SCHEMA['properties']):
-        raise ValueError('Invalid transfer assessment')
-    for key, specification in ASSESSMENT_SCHEMA['properties'].items():
-        value = assessment[key]
-        if not isinstance(value, str) or len(value) > 1000 or ('enum' in specification and value not in specification['enum']):
-            raise ValueError(f'Invalid assessment {key}')
-    if not assessment['evidence'].strip() or (assessment['grasp'] == 'supported' and not assessment['held_object'].strip()):
+    if not isinstance(assessment, dict):
+        raise ValueError('Invalid goal assessment')
+    universal = 'outcome' in assessment
+    if universal:
+        if (set(assessment) != set(ASSESSMENT_SCHEMA['properties'])
+                or assessment['outcome'] not in ('satisfied', 'unsatisfied', 'unknown')
+                or not isinstance(assessment['evidence'], str) or not assessment['evidence'].strip()
+                or not isinstance(assessment['observation_refs'], list)):
+            raise ValueError('Invalid general goal outcome assessment')
+        if assessment['transport'] is not None and (not isinstance(assessment['transport'], dict)
+                                                   or not assessment['transport']):
+            raise ValueError('Optional transport must be an object or null')
+    transport = transport_assessment(assessment)
+    if transport:
+        if set(transport) != set(TRANSPORT_SCHEMA['properties']):
+            raise ValueError('Invalid optional transport assessment')
+        for key, specification in TRANSPORT_SCHEMA['properties'].items():
+            value = transport[key]
+            if not isinstance(value, str) or len(value) > 1000 or ('enum' in specification and value not in specification['enum']):
+                raise ValueError(f'Invalid assessment {key}')
+    if (not universal and not transport) or (transport and (not transport['evidence'].strip()
+            or (transport['grasp'] == 'supported' and not transport['held_object'].strip()))):
         raise ValueError('Grasp assessment needs evidence and supported grasps need object identity')
     validate_memory_updates(decision['memory_updates'])
     perception = decision['perception']
@@ -74,7 +99,8 @@ class SceneMemory:
 
     def update(self, decision, step, request):
         validate_scene_fields(decision)
-        claim = {'step': step, 'request': request, **deepcopy(decision['assessment'])}
+        claim = {'step': step, 'request': request, **deepcopy(transport_assessment(decision['assessment'])),
+                 **deepcopy(decision['assessment'])}
         self.assessment = claim
         self.assessments = (self.assessments + [claim])[-12:]
         self.perception = deepcopy(decision['perception'])
@@ -149,16 +175,8 @@ class SceneMemory:
                                   'a changed location may reflect viewpoint, wording, motion, or misidentification.'}
 
     def authorize_navigation(self, fixture, limit):
-        if not re.search(r'\b(sink|fridge|refrigerator|oven|microwave|dishwasher|coffee machine|cabinet|'
-                         r'stove|hood|toaster|electric kettle|stand mixer|counter|table)\b', fixture.casefold()):
-            raise ValueError('Navigation target must name a catalog-supported fixture, not a position or object')
-        generic = fixture.casefold().strip()
-        if generic in ('counter', 'table') and self.assessment and self.assessment['phase'] == 'locate_destination':
-            named = re.findall(r'\b(?:dining|kitchen|island|breakfast|bar|coffee)\s+' + generic + r'\b',
-                               self.original_goal.casefold())
-            if named:
-                raise ValueError(f'Preserve the task-specific destination fixture name {sorted(set(named))}; '
-                                 f'a generic {generic} may be a different location')
+        if not isinstance(fixture, str) or not fixture.strip() or len(fixture) > 120:
+            raise ValueError('Navigation requires a named destination')
         # The policy, not the supervisor's inventory, resolves where to go.
         # Unknown location and absent memory are not authorization failures.
         if limit is not None and self.navigation_bursts >= limit:
@@ -178,7 +196,7 @@ class SceneMemory:
         return 'original_task_description' if self.task_names_fixture(fixture) else 'policy_navigation_request'
 
     def authorize_placement_stage(self, commands):
-        if not self.assessment or self.assessment['phase'] != 'locate_destination':
+        if not self.assessment or self.assessment.get('phase') != 'locate_destination':
             return
         if any(name == 'run_groot' and re.match(r'^\s*(?:place|put)\b', args['instruction'], re.IGNORECASE)
                for name, args in commands):
@@ -191,7 +209,7 @@ class SceneMemory:
         self.last_instruction = instruction
 
     def near_destination(self):
-        if not self.assessment or self.assessment['grasp'] != 'supported':
+        if not self.assessment or self.assessment.get('grasp') != 'supported':
             return False
         destination = self.assessment['destination'].casefold().strip()
         return self.assessment['phase'] == 'place' or any(

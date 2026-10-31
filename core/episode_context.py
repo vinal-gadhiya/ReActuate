@@ -7,6 +7,7 @@ does not query the simulator, call a model, or generate robot actions.
 from collections import OrderedDict, deque
 from copy import deepcopy
 import json
+from core.scene_memory import transport_assessment
 
 
 def short(value, limit=300):
@@ -18,7 +19,8 @@ def plan_view(steps):
     return [{'id': short(step['id'], 100), 'instruction': short(step['instruction'], 240),
              'target': short(step['target'], 80),
              'success_criteria': short(step['success_criteria'], 160),
-             'max_steps': step['max_steps']} for step in steps]
+             'max_steps': step['max_steps'], **({'goal_ids': list(step['goal_ids'])} if 'goal_ids' in step else {})}
+            for step in steps]
 
 
 class EpisodeContext:
@@ -48,7 +50,9 @@ class EpisodeContext:
 
     @staticmethod
     def assessment_signature(assessment):
-        return tuple(assessment.get(key) for key in ('phase', 'held_object', 'grasp'))
+        # Audit snapshots flatten optional transport fields alongside outcome.
+        transport = (assessment.get('transport') or {}) if 'transport' in assessment else assessment
+        return (assessment.get('outcome'), *(transport.get(key) for key in ('phase', 'held_object', 'grasp')))
 
     def execution_feedback(self):
         return deepcopy({
@@ -89,8 +93,10 @@ class EpisodeContext:
             self.total_decisions += 1
             item.update(status=event['status'], evidence=short(event['evidence']))
             assessment = event.get('assessment', {})
-            item.update(phase=assessment.get('phase'), held_object=assessment.get('held_object'),
-                        grasp=assessment.get('grasp'), destination=short(assessment.get('destination', ''), 180))
+            transport = transport_assessment(assessment)
+            item.update(outcome=assessment.get('outcome'), phase=transport.get('phase'),
+                        held_object=transport.get('held_object'), grasp=transport.get('grasp'),
+                        destination=short(transport.get('destination', ''), 180))
             for execution in self.pending_executions:
                 attempt = self.instruction_attempts[execution['key']]
                 changed = self.assessment_signature(execution['assessment_before']) != self.assessment_signature(assessment)
@@ -99,7 +105,7 @@ class EpisodeContext:
                     'subtask': execution['subtask'], 'instruction': execution['instruction'],
                     'step_before': execution['step_before'], 'step_after': execution['step_after'],
                     'review_step': step, 'assessment_before': execution['assessment_before'],
-                    'assessment_after': {key: assessment.get(key) for key in ('phase', 'held_object', 'grasp')},
+                    'assessment_after': {key: item.get(key) for key in ('outcome', 'phase', 'held_object', 'grasp')},
                     'assessment_changed': changed, 'evidence': short(event['evidence']),
                     'same_assessment_bursts': attempt['same_assessment_bursts'],
                 })
@@ -147,7 +153,7 @@ class EpisodeContext:
                     'key': key, 'subtask': subtask, 'instruction': short(instruction, 240),
                     'step_before': event['step_before'], 'step_after': step,
                     'assessment_before': {field: (self.latest_decision or {}).get(field)
-                                          for field in ('phase', 'held_object', 'grasp')},
+                                          for field in ('outcome', 'phase', 'held_object', 'grasp')},
                 })
                 self.pending_executions = self.pending_executions[-12:]
                 # Pending events must still find their counters at review time.

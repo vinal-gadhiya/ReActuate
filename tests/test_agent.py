@@ -8,6 +8,7 @@ import numpy as np
 
 from core.agent import parse_program, validate_decision, validate_plan
 from core.policy_http import RetryableSupervisorError
+from core.scene_memory import SceneMemory
 from inference.meta_api import MetaAPIError, output_text
 from inference.supervisor import Supervisor, sam_boxes
 from sim.evaluate import make_policy_observation
@@ -362,6 +363,47 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(instructions, ['open cabinet', 'place mug inside'])
         self.assertEqual(observation['annotation.task'], 'original task')
 
+    def test_simple_stage_instructions_reach_policy_verbatim(self):
+        observation = {'video.camera': np.zeros((4, 6, 3), dtype=np.uint8),
+                       'state.arm': np.zeros(2), 'annotation.task': 'original composite goal'}
+        metadata = {'camera_height': 4, 'camera_width': 6, 'action_horizon': 4,
+                    'modalities': {'video': {'modality_keys': ['video.camera']},
+                                   'state': {'modality_keys': ['state.arm']},
+                                   'language': {'modality_keys': ['annotation.task']},
+                                   'action': {'modality_keys': ['action.arm']}}}
+        received, events = [], []
+
+        class Env:
+            action_space = SimpleNamespace(spaces={'action.arm': SimpleNamespace(shape=(2,))})
+
+            def step(self, action):
+                return dict(observation), 0, False, False, {'success': False}
+
+        class Policy:
+            def predict(self, inputs):
+                received.append(inputs['annotation.task'].item())
+                return {'action.arm': np.zeros((4, 2)), '__request_id': inputs['__request_id']}
+
+        tools = EpisodeTools(Env(), observation, Policy(), metadata,
+                             SimpleNamespace(append_data=lambda frame: None), 10, 4)
+        instructions = ['Pick up the strawberry.', 'Navigate to the dining counter.',
+                        'Place the strawberry on the pancake.']
+        replies = iter([decision(program=f'run_groot(instruction={text!r}, steps=1)') for text in instructions]
+                       + [decision('stop', '')])
+        memory = SceneMemory()
+        reason = run_subtasks(tools, [step('transfer', instructions[-1])], 'agent',
+                              lambda *args: next(replies), events.append, scene_memory=memory,
+                              concise_instructions=True)
+        self.assertEqual(reason, 'supervisor_stop')
+        self.assertEqual(received, instructions)
+        executed = [event for event in events if event['event'] == 'tool']
+        self.assertEqual([event['tool'] for event in executed], ['run_groot'] * 3)
+        self.assertEqual([event['policy_instruction'] for event in executed], instructions)
+        self.assertEqual(memory.navigation_bursts, 1)
+        self.assertEqual(observation['annotation.task'], 'original composite goal')
+        tools.navigate('dining counter', 1)
+        self.assertEqual(received[-1], 'Navigate to the dining counter.')
+
     def test_sequence_switches_in_place_and_does_not_claim_task_success(self):
         tools, events = FakeTools(), []
         replies = iter([
@@ -516,20 +558,17 @@ class AgentTests(unittest.TestCase):
         supervisor.handle('decide', context, images)
         for payload, prompt in requests:
             tasks = payload['atomic_instruction_catalog']['tasks']
-            self.assertEqual(len(tasks), 65)
-            self.assertTrue(any(task['name'] == 'PickPlaceCounterToCabinet' for task in tasks))
+            self.assertLessEqual(len(tasks), 10)
+            self.assertTrue(any(task['name'] == 'OpenFridge' for task in tasks))
             self.assertNotIn('instruction_catalog', payload['context']['simulator_context']['policy_reference'])
             composite = payload['context']['simulator_context']['task']['composite_reference']
             self.assertEqual(composite['name'], 'GarnishPancake')
             self.assertEqual(composite['skills_required'], ['Navigation', 'Open Door', 'Pick & Place'])
-            self.assertIn('skills_required', prompt)
-            self.assertIn('Do not combine acquisition and placement in one instruction.', prompt)
-            self.assertIn('Reorder independent unfinished subgoals', prompt)
-            self.assertIn('replacement_steps replaces the entire UNFINISHED suffix', prompt)
-            self.assertIn('If a held object contributes to ANY unfinished goal', prompt)
-            self.assertIn('Do not infer that objectives commute', prompt)
-        self.assertIn('Separate pickup and placement', requests[0][1])
-        self.assertIn('exactly ONE literal tool call per decision', requests[1][1])
+            self.assertIn('stable IDs', prompt)
+            self.assertIn('not a word limit', prompt)
+            self.assertNotIn('episode_context', payload['context'])
+        self.assertIn('Operation: plan', requests[0][1])
+        self.assertIn('Operation: decide', requests[1][1])
         self.assertEqual(context['simulator_context']['policy_reference']['instruction_catalog'], {'client_copy': True})
         self.assertEqual(context['simulator_context']['task']['composite_reference']['skills_required'],
                          ['Navigation', 'Open Door', 'Pick & Place'])

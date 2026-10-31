@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from core.agent import parse_program, normalize_navigation_commands
+from core.agent import parse_program, navigation_fixture
 from core.scene_memory import SceneMemory, validate_scene_fields
 from inference.perception import tracking_records, video_part
 from inference.supervisor import Supervisor
@@ -45,7 +45,7 @@ class SceneMemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             memory.authorize_navigation('sink', 0)
         with self.assertRaises(ValueError):
-            memory.authorize_navigation('glass', 2)
+            memory.authorize_navigation('', 2)
         self.assertEqual(parse_program('navigate(fixture="sink", steps=4)')[0][0], 'navigate')
         memory.last_navigation, memory.stall_streak = 'sink', 2
         with self.assertRaisesRegex(ValueError, 'stalled'):
@@ -67,7 +67,7 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(entry['last_seen_location'], 'beside source counter')
         self.assertIn('Basin', entry['last_seen_evidence'])
 
-    def test_agent_routes_navigation_language_through_guarded_tool_and_preserves_baseline(self):
+    def test_agent_passes_navigation_language_unchanged_with_guard_accounting(self):
         tools, events = FakeTools(), []
         replies = iter([decision(program='run_groot(instruction="Navigate to the sink.", steps=4)'), decision('stop', '')])
         reason = run_subtasks(tools, [step('transfer', 'pick and place')], 'agent',
@@ -75,9 +75,11 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(reason, 'supervisor_stop')
         self.assertEqual(tools.steps, 4)
         self.assertFalse(any(event['event'] == 'recovery_required' for event in events))
-        self.assertTrue(any(event['event'] == 'navigation_normalized' for event in events))
+        self.assertEqual(tools.instructions, ['Navigate to the sink.'])
+        self.assertFalse(any(event['event'] == 'navigation_normalized' for event in events))
         executed = next(event for event in events if event['event'] == 'tool')
-        self.assertEqual(executed['tool'], 'navigate')
+        self.assertEqual(executed['tool'], 'run_groot')
+        self.assertEqual(executed['policy_instruction'], 'Navigate to the sink.')
         self.assertEqual(executed['navigation_source'], 'policy_navigation_request')
         tools = FakeTools()
         run_subtasks(tools, [step('navigation', 'Navigate to the sink.')], 'baseline', None, lambda event: None)
@@ -109,7 +111,9 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(reason, 'task_success')
         self.assertEqual(tools.steps, 32)
         self.assertEqual(memory.navigation_bursts, 8)
-        self.assertTrue(all(event['tool'] == 'navigate' for event in events if event['event'] == 'tool'))
+        executed = [event for event in events if event['event'] == 'tool']
+        self.assertEqual([event['tool'] for event in executed], ['navigate'] * 6 + ['run_groot'] * 2)
+        self.assertEqual(tools.instructions, ['Navigate to the dining counter.'] * 8)
         self.assertFalse(any(event['event'] == 'recovery_required' for event in events))
 
     def test_navigation_remains_bounded_by_episode_steps_without_a_separate_cap(self):
@@ -122,7 +126,7 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(tools.steps, tools.max_steps)
         self.assertEqual(memory.navigation_bursts, 8)
 
-    def test_normalized_navigation_cannot_bypass_explicit_caps(self):
+    def test_verbatim_navigation_cannot_bypass_explicit_caps(self):
         for limit in (0, 1):
             with self.subTest(limit=limit):
                 tools, events = FakeTools(), []
@@ -145,15 +149,13 @@ class SceneMemoryTests(unittest.TestCase):
         self.assertEqual(tools.steps, 8)
         self.assertTrue(any('stalled' in event.get('reason', '') for event in events))
 
-    def test_navigation_normalization_preserves_target_and_steps_and_rejects_malformed_requests(self):
-        original = [('run_groot', {'instruction': 'Navigate to the dining counter.', 'steps': 32})]
-        self.assertEqual(normalize_navigation_commands(original),
-                         [('navigate', {'fixture': 'dining counter', 'steps': 32})])
-        self.assertEqual(original[0][0], 'run_groot')
-        self.assertEqual(normalize_navigation_commands([('run_groot', {'instruction': 'Pick up the cup.', 'steps': 4})]),
-                         [('run_groot', {'instruction': 'Pick up the cup.', 'steps': 4})])
+    def test_navigation_detection_does_not_modify_instruction_text(self):
+        original = {'instruction': 'Navigate to the dining counter.', 'steps': 32}
+        self.assertEqual(navigation_fixture('run_groot', original), 'dining counter')
+        self.assertEqual(original, {'instruction': 'Navigate to the dining counter.', 'steps': 32})
+        self.assertIsNone(navigation_fixture('run_groot', {'instruction': 'Pick up the cup.', 'steps': 4}))
         with self.assertRaises(ValueError):
-            normalize_navigation_commands([('run_groot', {'instruction': 'Navigate around until something is found.', 'steps': 4})])
+            navigation_fixture('run_groot', {'instruction': 'Navigate around until something is found.', 'steps': 4})
 
     def test_repeated_stationary_commands_stop_without_further_motion(self):
         class StationaryTools(FakeTools):

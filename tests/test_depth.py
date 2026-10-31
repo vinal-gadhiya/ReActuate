@@ -84,7 +84,7 @@ class DepthTests(unittest.TestCase):
             self.assertEqual(sum(part['type'] == 'input_image' for part in call[1]), 12)
             payload = json.loads(call[1][0]['text'])
             self.assertTrue(payload['context']['depth_observations']['enabled'])
-            self.assertIn('not a gripper-object distance', call[2])
+            self.assertIn('contact or gripper-object distance', call[2])
         orphan = {'current:camera': images['current:camera'], 'current_depth:other': images['current:camera']}
         with self.assertRaisesRegex(ValueError, 'match'):
             supervisor.handle('plan', context, orphan)

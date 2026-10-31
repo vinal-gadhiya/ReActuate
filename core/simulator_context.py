@@ -4,7 +4,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 
-CONTEXT_VERSION = 6
+CONTEXT_VERSION = 8
 
 
 def load_atomic_task_catalog(registered_tasks=()):
@@ -91,7 +91,7 @@ SIMULATOR_GUIDE = {
         'Subtask max_steps are ceilings in plan budget mode and advisory in episode mode; episode, decision, and API limits still apply.',
         'Navigation has no separate burst cap by default and uses remaining execution budgets. '
         'An explicit cap still applies; repeated stationary requests are rejected. Simple Navigate-to '
-        'language is routed through the same navigation tool and checks.',
+        'instructions are passed to the policy unchanged, with navigation checks and accounting.',
     ],
 }
 
