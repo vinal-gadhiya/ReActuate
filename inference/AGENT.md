@@ -39,8 +39,28 @@ completion accurately. Those are model-quality questions requiring evaluation.
 `core/instructions.py` separates semantic action fields (intent, object,
 destination, instruction) from backend language rendering. Explicit instructions
 reach either backend verbatim. The executable command must match the rendered
-text. Simple wording is preferred, with no enforced 12-word/96-character limit
-or panel-name ban. Appearance and spatial relations may be included when useful.
+text. For the version-2 agent, instructions must match the atomic catalog's
+documented descriptions or its `instruction_forms`, with scene entities substituted.
+Forms are derived reference data: split pickup/place clauses, navigation, fixture
+opening/closing and switching. Specialized descriptions retain their documented
+button, lever, rack and temperature wording. Documented alternatives and singular/
+plural door notation may be instantiated. Case and final punctuation may differ;
+accepted instruction text is never rewritten. No 12-word/96-character limit or
+panel-name ban is imposed.
+
+The atomic catalog has descriptions and categories. `skills_required` and
+`skill_keys` come from the composite catalog. Harness-authored `skill_reference_tasks`
+associations in the atomic catalog reserve relevant examples for those skill
+families before lexical retrieval. These associations and the instruction forms
+are labelled derived data, not additional upstream annotations or trained skills.
+Muse receives the current composite reference, relevant atomic descriptions and
+the complete shared form list on each request.
+
+Generated initial plans, replacement windows and executable instructions are
+checked before motion. Invalid language produces budgeted correction feedback;
+it is not silently paraphrased. For example, `Grab the mug.` must be corrected to
+`Pick up the mug.` A tool trace records the matched form, source atomic task(s),
+and catalog revision. Baseline and fixed-mode instructions remain unchanged.
 
 ```python
 run_groot(instruction="Pick up the mug.", steps=32)
@@ -56,8 +76,11 @@ stationarity checks and overall budgets apply.
 
 Backend profiles currently use the same simple fallback phrasing. They provide a
 boundary for measured changes, not evidence that both policies perform equally.
-Legacy library clients retain compatibility validators; the version-2 CLI uses
-semantic command matching rather than English placement regexes.
+Legacy library clients retain compatibility validators; the version-2 CLI adds
+catalog-language validation to semantic command matching. Regenerate old plans
+that contain free-form instructions after rebuilding both `sim` and `supervisor`.
+Matching a language form does not prove correct object grounding or that the
+policy can execute the subtask; those still require paired rollouts.
 
 ## Persistent outcomes and recovery
 

@@ -33,12 +33,17 @@ The selected frozen policy (GR00T or PatchWAM) owns all control actions. The CLI
 base/orientation freeze, or Cartesian placement corrections are applied. Muse
 and SAM provide planning, visual memory, verification, and language corrections.
 Destination visibility does not automatically shorten a policy execution burst.
-Agent policy instructions now use separate concise actions, with exactly one
-tool call per decision and observation before the next stage. Pickup and
-placement are separate language goals; access/opening is conditional on an
-observed obstruction or explicit requirement. The runner rejects multi-action
-commands or instructions over 12 words/96 characters without executing them.
-Detailed scene grounding stays in supervisor context. Baseline text is unchanged.
+Agent policy instructions use atomic-catalog vocabulary and formats, with exactly
+one tool call per decision and observation before the next stage. Pickup and
+placement can use separate clauses of the atomic transfer format; access/opening
+is conditional on an observed obstruction or explicit requirement. Generated
+plans, replans and policy requests must match a documented atomic description or
+an explicitly derived `instruction_forms` template in the atomic catalog. Entity
+names fill the slots; unsupported synonyms and appended motor explanations are
+rejected before motion with correction feedback. Accepted text is passed through
+unchanged, with no 12-word/96-character limit. Tool traces record matched form
+provenance. Baseline text is unchanged. Rebuild both sim and supervisor and
+regenerate old plans that contain free-form language to use this contract.
 Generated plans include a visual inventory, apparent access, first-action
 rationale and route rationale, recorded in `scene_assessment.json` and `plan.json`.
 Current survey claims seed memory before the first decision without motion or an

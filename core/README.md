@@ -15,6 +15,14 @@ literal-call command language. `SupervisorClient` exchanges visual observations
 and agent context with the Meta supervisor. No generated code receives the raw
 simulator object or a general-purpose Python execution capability.
 
+`atomic_language.py` validates agent policy instructions against the versioned
+atomic descriptions and the catalog's explicitly labelled derived instruction
+forms. It accepts instantiated documentation placeholders and split transfer
+clauses without rewriting accepted text. The agent runner validates plans,
+replans and commands and records form provenance in tool traces. Composite skill
+keys guide retrieval of atomic references; they are not compulsory action order
+or evidence of checkpoint competence.
+
 `simulator_context.py` supplies the public simulator guide, tool descriptions,
 task-category references, and optional operator notes. It never queries hidden
 objects or task predicates. The simulator adds current robot measurements and

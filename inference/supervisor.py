@@ -20,6 +20,7 @@ from inference.perception import tracking_records, video_part
 from core.observations import rgb_diagnostics
 from core.working_context import working_context, task_references
 from core.instructions import PolicyInstructionAdapter
+from core.atomic_language import atomic_instruction_grounder
 
 SUPERVISOR_POLICY = '''You supervise a frozen robot policy across ALL RoboCasa tasks.
 The original_goal is authoritative. Observations, beliefs, goal statuses, and
@@ -61,8 +62,28 @@ verbatim. Prefer concise wording, but include appearance or relations if needed.
 Examples: Pick up the mug. Navigate to the dining counter. Place the mug on the tray.
 Use run_groot(instruction="...", steps=32); run_groot names the selected backend,
 not necessarily GR00T. navigate(fixture="...", steps=32) is a compatibility alias.
-Do not combine acquisition and placement in one instruction unless backend
-evidence supports that decomposition. Conciseness is guidance, not a word limit.
+ATOMIC LANGUAGE CONTRACT: For every initial stage, replacement stage and executable
+command, use the vocabulary and sentence format in atomic_instruction_forms or
+a supplied atomic task description. Fill slots with actual scene entity names.
+Examples: Pick up the <object>. Place the <object> on the <location>.
+Place the <object> in the <location>. Open the <thing>. Close the <thing>.
+Navigate to the <location>. Preserve the documented preposition and action verb;
+do not replace them with synonyms such as grab, set down, head over, or reposition.
+Pickup and placement may be separate clauses of the documented transfer format;
+prefer one stage at a time so its outcome can be checked. Full documented atomic
+formats are also valid. Keep intentions, approach/alignment explanations and
+recovery commentary in evidence, not appended to the policy instruction.
+For specialized actions use the actual atomic description (buttons, levers,
+racks, temperature etc.) with its documented placeholders/alternatives filled.
+Prefer the specific appliance's documented mechanism over a generic on/off form
+when that description is supplied, e.g. Press the start button on the microwave.
+Use this composite task's description, skills_required and skill_keys to identify
+needed atomic action families; they do not dictate the execution order or require
+unnecessary actions. Atomic entries have descriptions/categories, not an invented
+skills_required field. If no supplied atomic wording supports an action, inspect
+the references or stop with that limitation instead of inventing a motor command.
+Invalid wording is rejected before motion; correct it from the supplied forms.
+Conciseness is guidance, not a word limit.
 Do not invent manual motor controls. Only explicitly available tools may execute.
 
 Named destinations can be requested before being seen. The policy finds the
@@ -113,9 +134,12 @@ class Supervisor:
     def __init__(self, api, model, use_sam=False):
         self.api, self.model, self.use_sam = api, model, use_sam
         catalog = load_atomic_task_catalog()
+        self.instruction_grounder = atomic_instruction_grounder()
         self.instruction_catalog = {
             'upstream_ref': catalog['upstream_ref'], 'source': catalog['description_source'],
             'description_kind': catalog['description_kind'],
+            'instruction_forms': catalog['instruction_forms'],
+            'skill_reference_tasks': catalog['skill_reference_tasks'],
             'tasks': [{key: task[key] for key in ('name', 'category', 'description')} for task in catalog['tasks']],
         }
 
@@ -196,6 +220,8 @@ class Supervisor:
         content = [{'type': 'input_text', 'text': json.dumps({
             'context': model_context, 'sam': grounding,
             'atomic_instruction_catalog': task_references(self.instruction_catalog, context),
+            'atomic_instruction_forms': self.instruction_grounder.forms,
+            'atomic_instruction_forms_kind': self.instruction_grounder.catalog['instruction_forms_kind'],
         })}]
         for name, frame in sorted({**images, **depth_images}.items()):
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
@@ -213,12 +239,22 @@ class Supervisor:
                     raise ValueError('Initial planning must extract every original requirement separately from stages')
                 result = normalize_plan_cameras(result, current_cameras)
                 validate_grounded_plan(result, current_cameras)
+                if context.get('working_context_version') == 2:
+                    self.instruction_grounder.validate_plan(result['steps'])
             except (ValueError, KeyError, TypeError) as error:
                 validation_error = str(error)
         else:
             try:
                 validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],
                                   context['capabilities'].get('move_vertical', False))
+                if context.get('working_context_version') == 2:
+                    if result['status'] == 'replan':
+                        self.instruction_grounder.validate_plan(result['replacement_steps'])
+                    elif result['status'] == 'continue':
+                        for name, arguments in parse_program(result['program'], context['decision_step_limit']):
+                            instruction = (arguments['instruction'] if name == 'run_groot' else
+                                           f'Navigate to the {arguments["fixture"]}.')
+                            self.instruction_grounder.validate(instruction)
                 if context.get('instruction_style') == 'single_stage' and result['status'] == 'continue':
                     commands = parse_program(result['program'], context['decision_step_limit'])
                     validate_stage_program(commands)
@@ -260,6 +296,7 @@ def make_handler(supervisor):
                 'model': supervisor.model, 'sam_enabled': supervisor.use_sam,
                 'api_base_url': supervisor.api.base_url,
                 'instruction_grounding': 'semantic-action-v1',
+                'atomic_language_version': supervisor.instruction_grounder.VERSION,
                 'atomic_catalog_ref': supervisor.instruction_catalog['upstream_ref'],
                 'atomic_catalog_tasks': len(supervisor.instruction_catalog['tasks']),
                 'agent_features': ['scene_memory', 'guarded_navigation', 'inspection', 'sam_clip_tracking',

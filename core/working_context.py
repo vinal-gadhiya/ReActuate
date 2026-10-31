@@ -16,9 +16,23 @@ def task_references(catalog, context, limit=10):
     query = words([context.get('original_goal', ''), stage, reference.get('skills_required', [])])
     ranked = sorted(catalog['tasks'], key=lambda entry: (
         -len(query & words([entry['name'], entry['category'], entry['description']])), entry['name']))
+    # Reserve references for the task's documented skills before filling lexical
+    # matches. This is catalog retrieval, not a task-specific execution recipe.
+    forms = catalog.get('instruction_forms', [])
+    selected = [entry for entry in ranked if entry['name'] == task.get('name')]
+    for skill in reference.get('skill_keys', []):
+        sources = set(catalog.get('skill_reference_tasks', {}).get(skill, []))
+        sources.update(name for form in forms if skill in form['skill_keys'] for name in form['source_tasks'])
+        if any(entry['name'] in sources for entry in selected):
+            continue
+        match = next((entry for entry in ranked if entry['name'] in sources), None)
+        if match is not None:
+            selected.append(match)
+    selected.extend(entry for entry in ranked if entry not in selected)
     return {'upstream_ref': catalog['upstream_ref'], 'source': catalog['source'],
-            'tasks': deepcopy(ranked[:limit]),
-            'interpretation': 'Relevant reference wording only. Omission does not disable tools or imply lack of policy capability.'}
+            'tasks': deepcopy(selected[:limit]),
+            'interpretation': 'Atomic descriptions supply required instruction vocabulary and format. '
+                              'Composite skill hints guide retrieval, not compulsory order or proof of policy competence.'}
 
 
 def working_context(context):

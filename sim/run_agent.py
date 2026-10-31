@@ -18,6 +18,7 @@ from core.simulator_context import build_simulator_context, load_operator_contex
 from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
+from core.atomic_language import atomic_instruction_grounder
 from copy import deepcopy
 from core.episode_context import EpisodeContext
 from core.observations import check_rgb
@@ -206,7 +207,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=None, stall_bursts=4,
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
                  concise_instructions=False, max_stop_continuations=None,
-                 goal_ledger=None, attempt_history=None, instruction_adapter=None):
+                 goal_ledger=None, attempt_history=None, instruction_adapter=None, instruction_grounder=None):
     if supervisor_stop_policy not in ('halt', 'continue'):
         raise ValueError('Unknown supervisor stop policy')
     if max_supervisor_failures < 0:
@@ -229,6 +230,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
     window_exhausted = False
     if ledger is not None:
         ledger.validate_window(plan)
+    if mode == 'agent' and instruction_grounder is not None:
+        instruction_grounder.validate_plan(plan)
     while not tools.done and index < len(plan):
         supervisor_unavailable = False
         step = plan[index]
@@ -275,6 +278,13 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 if not supervisor_unavailable:
                     validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
                                       getattr(tools, 'allow_vertical', False))
+                    if instruction_grounder is not None:
+                        if decision['status'] == 'replan':
+                            instruction_grounder.validate_plan(decision['replacement_steps'])
+                        elif decision['status'] == 'continue':
+                            for name, arguments in parse_program(decision['program'], max(0, min(decision_steps, remaining))):
+                                instruction_grounder.validate(arguments['instruction'] if name == 'run_groot' else
+                                                              f'Navigate to the {arguments["fixture"]}.')
                     if ledger is not None:
                         if 'outcome' not in decision['assessment']:
                             raise ValueError('Ledger mode requires a universal outcome assessment')
@@ -400,6 +410,10 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         try:
             if window_exhausted:
                 raise ValueError('Action window complete: replan for pending requirements before executing more work')
+            if mode == 'agent' and instruction_grounder is not None:
+                for name, arguments in commands:
+                    instruction_grounder.validate(arguments['instruction'] if name == 'run_groot' else
+                                                  f'Navigate to the {arguments["fixture"]}.')
             if mode == 'agent' and concise_instructions:
                 validate_stage_program(commands)
                 if ledger is None:
@@ -487,6 +501,9 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                                            f'Navigate to the {arguments["fixture"]}.' if name == 'navigate' else None),
                     'step_before': before, 'step_after': tools.steps,
                     **({'attempt': attempt} if attempt is not None else {}),
+                    **({'instruction_grounding': instruction_grounder.validate(
+                        arguments['instruction'] if name == 'run_groot' else f'Navigate to the {arguments["fixture"]}.')}
+                       if mode == 'agent' and instruction_grounder is not None else {}),
                     **({'navigation_source': memory.navigation_source(fixture)} if fixture is not None else {}),
                     'diagnostics': getattr(tools, 'last_diagnostics', {}),
                     **({'transport_control': transport.context()} if transport is not None else {})})
@@ -865,6 +882,7 @@ def main():
                         raise ValueError('Initial agent planning must extract persistent original requirements')
                     ledger = GoalLedger(goal, requirements)
                     ledger.validate_window(plan)
+                    atomic_instruction_grounder().validate_plan(plan)
                     ledger.observe(tools.steps, {f'current:{key}' for key in camera_keys})
                     attempts = AttemptHistory(ledger, args.max_goal_failures, args.max_goal_recoveries)
                     saved_plan['requirements'] = ledger.definitions()
@@ -900,6 +918,7 @@ def main():
                     max_stop_continuations=args.max_stop_continuations,
                     goal_ledger=ledger, attempt_history=attempts,
                     instruction_adapter=PolicyInstructionAdapter('patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t'),
+                    instruction_grounder=atomic_instruction_grounder() if args.mode == 'agent' else None,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
