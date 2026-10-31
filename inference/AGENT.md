@@ -212,8 +212,8 @@ Assign whole episodes to development or held_out partitions. Annotate multiple
 acceptable `eligible_first_targets` for planning, or offline outcome labels for
 completion judgments. Labels are never sent to Muse. Unlabelled cases make no
 API calls. Replay reports eligible-choice rate, false positives and abstentions;
-it makes real API calls but executes no robot actions. Saved JPEG snapshots can
-be lossy. Offline labels must match the active stage outcome being measured.
+it makes real API calls but executes no robot actions. New request snapshots use
+lossless PNG; older JPEG artifacts can be lossy. Offline labels must match the active stage outcome being measured.
 Replay is not closed-loop success evidence.
 
 Validation gates: contract tests, labelled real-observation cases, then paired
@@ -222,6 +222,34 @@ operational failures. Mocked tests establish plumbing, not model competence.
 No new live performance results are claimed by this refactor.
 
 ## Thor deployment and checks
+
+Agent runs enable `--boundary-review` by default. Before action planning, a
+separate Muse request judges only the active stage from public sensor evidence.
+It does not receive the planner's memories, failure reports, or proposed actions.
+It compares all cameras, including wrist object/finger relations and external
+background motion, and explicitly considers multiple similar object instances.
+The same mechanism reviews access, placement, navigation and other stage effects.
+Both reviewer and planner receive current/before views plus up to two additional
+dated samples from the recent motion buffer, regardless of SAM settings. The
+frame mapping and actual supplied references are recorded and validated. Sensor
+inputs and numerical actions sent to the frozen policy remain unchanged.
+
+A supported current satisfied review returns a zero-motion stage completion
+directly; the runner then asks about the next stage at the same physical step.
+The review does not mark ledger requirements satisfied or change simulator score.
+Unknown/unsatisfied reviews go to the planner as fallible evidence. Invalid or
+stale review references cannot advance a stage. The review is in
+`supervisor_response.boundary_review`, with its call marked in the usage audit.
+This is independent review by the same Muse model, not an independently trained
+grasp detector or a guarantee of correct perception.
+
+The reviewer shares the existing API budget: unresolved decisions use two Muse
+calls, plus SAM when enabled and budget permits. With only one call remaining,
+the reviewer and SAM are skipped to preserve planning. No reviewer runs for an
+exhausted planning window. Use `--no-boundary-review` for paired ablation; temporal
+images remain enabled. Compare labelled real frames and paired scenes across
+task families, including false completion judgments and baseline regressions,
+before claiming perception quality improved.
 
 Completion of an access helper means sufficient clearance and reach to the
 required working area, not visibility of some contents alone. Plan criteria and

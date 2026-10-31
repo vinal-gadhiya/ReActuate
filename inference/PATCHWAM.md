@@ -128,6 +128,16 @@ be accounted for when interpreting differences from the release's evaluator.
 
 ## Muse and optional SAM
 
+Independent stage-boundary review is enabled by default (`--boundary-review`;
+disable with `--no-boundary-review` for comparison). It uses a separate Muse
+request with dated current, previous and recent motion samples from all cameras.
+A supported completed-stage judgment ends that instruction before another policy
+burst. Review is task-general and independent of SAM; it leaves policy sensors,
+actions and explicit instructions unchanged. Its calls share `--max-api-calls`.
+Unresolved decisions cost two Muse calls, plus SAM when budget permits; choose
+supervision budgets accordingly. Trace responses retain the review for inspection.
+This is a visual claim requiring live evaluation, not a guaranteed grasp check.
+
 Agent instructions now use separate concise stages such as `Pick up the cup.`
 and `Place the cup on the tray.`, with observation between them. Opening/access
 is conditional on the actual obstruction or explicit task requirement. Detailed

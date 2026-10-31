@@ -57,6 +57,7 @@ def run_command(args, condition, seed, output, plan=None):
     if plan is not None:
         command += ['--plan', str(plan)]
     if condition != 'baseline':
+        command += ['--boundary-review' if getattr(args, 'boundary_review', True) else '--no-boundary-review']
         command += ['--execution-policy', getattr(args, 'execution_policy', 'episode')]
         if getattr(args, 'depth', False):
             command += ['--depth', '--depth-max-metres', str(getattr(args, 'depth_max_metres', 3.0))]
@@ -235,6 +236,7 @@ def main():
                         help='Simulator only: honor Muse stop, or continue short guarded policy bursts within remaining budgets')
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
+    parser.add_argument('--boundary-review', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--depth', action='store_true', help='Give Muse aligned depth views in supervised conditions only')
     parser.add_argument('--depth-max-metres', type=float, default=3.0)
     parser.add_argument('--require-unseen-composite', action='store_true')

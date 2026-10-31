@@ -22,6 +22,7 @@ from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
 from core.execution import completed_stage_decision, validate_stage_switch
+from core.boundary_review import temporal_snapshots
 from copy import deepcopy
 from core.episode_context import EpisodeContext
 from core.observations import check_rgb
@@ -705,6 +706,8 @@ def main():
     parser.add_argument('--require-unseen-composite', action='store_true', help='Require task in pinned composite_unseen registry and outside pretrain300')
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
+    parser.add_argument('--boundary-review', action=argparse.BooleanOptionalAction, default=True,
+                        help='Independent visual stage review before action planning, within the shared API budget')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clip tracking; default uses images only')
     parser.add_argument('--depth', action='store_true', help='Agent only: send aligned depth visualizations to Muse, never to the policy')
     parser.add_argument('--depth-max-metres', type=float, default=3.0, help='Fixed depth visualization range in metres (default: 3)')
@@ -856,6 +859,14 @@ def main():
                 images = dict(current)
                 if previous_images is not None and operation == 'decide':
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
+                temporal_mapping = []
+                if operation == 'decide':
+                    temporal_images, temporal_mapping = temporal_snapshots(
+                        tools.frames, tools.steps, previous_observation_step, camera_keys)
+                    images.update(temporal_images)
+                    if ledger is not None:
+                        for item in temporal_mapping:
+                            ledger.observe(item['step'], [item['camera']])
                 depth_context = {'enabled': False}
                 current_depth = None
                 if args.depth:
@@ -881,8 +892,7 @@ def main():
                 for number, (label, frame) in enumerate(sorted(images.items())):
                     if label.startswith('clip:'):
                         continue
-                    extension = 'png' if label.startswith(('current_depth:', 'before_depth:')) else 'jpg'
-                    filename = f'observation-{request_number:03d}-{number}.{extension}'
+                    filename = f'observation-{request_number:03d}-{number}.png'
                     imageio.imwrite(directory / filename, frame)
                     references.append({'label': label, 'path': filename})
                 if any(key.startswith('clip:') for key in images):
@@ -912,9 +922,12 @@ def main():
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
                     'before_observation_step': previous_observation_step if operation == 'decide' else None,
+                    'boundary_review_enabled': args.boundary_review,
+                    'temporal_observations': temporal_mapping,
                     'observation_refs': [{'step': tools.steps, 'camera': key} for key in current] + (
                         [{'step': previous_observation_step, 'camera': key} for key in previous_images]
-                        if previous_images is not None and operation == 'decide' else []),
+                        if previous_images is not None and operation == 'decide' else []) + [
+                            {'step': item['step'], 'camera': item['camera']} for item in temporal_mapping],
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': (None if args.max_navigation_bursts is None else
                                                max(0, args.max_navigation_bursts - memory.navigation_bursts)),

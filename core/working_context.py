@@ -53,6 +53,7 @@ def working_context(context):
         'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used', 'last_stage_transition',
         'subtask_budget_mode', 'planning_window_exhausted', 'candidate_plan', 'diagnostic_replay',
         'observation_step', 'before_observation_step', 'observation_refs', 'depth_observations',
+        'temporal_observations', 'boundary_review_enabled',
         'attempt_history', 'recovery_feedback', 'plan_validation_feedback', 'allowed_current_cameras',
         'decision_step_limit', 'episode_steps_left', 'api_calls_left', 'replans_left',
         'navigation_bursts_left', 'navigation_budget_mode', 'execution_limits', 'capabilities',
