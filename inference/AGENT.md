@@ -223,6 +223,20 @@ No new live performance results are claimed by this refactor.
 
 ## Thor deployment and checks
 
+Completion of an access helper means sufficient clearance and reach to the
+required working area, not visibility of some contents alone. Plan criteria and
+Muse judgments must reflect that functional purpose across fixtures. Do not
+require all panels to open unless required by the task or actual access path.
+Each following stage checks current prerequisites; newer evidence of blocked
+access can justify a temporary intervention while retaining the pending work.
+These remain fallible visual judgments, not geometric verification by the runner.
+
+Backend identity is checked with `--expected-policy gr00t|patchwam` (or the
+`EXPECTED_POLICY` environment variable). The PatchWAM overlay sets that guard
+for simulator runs. Omitted `--action-steps` uses backend recommendations, with
+the legacy default retained when no recommendation exists. Startup and burst
+diagnostics identify the actual backend; `run_groot` remains a compatibility name.
+
 Run Python, tests, builds, simulation and inference on Thor containers only.
 For the PatchWAM compose configuration, rebuild both shared-source services:
 

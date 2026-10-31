@@ -32,6 +32,23 @@ the model. Muse receives PatchWAM-specific executor context. `run_groot(...)`
 remains the compatibility tool name in traces/programs, but calls PatchWAM when
 this backend is selected. SAM and Muse stay in the separate supervisor container.
 
+The overlay also sets `EXPECTED_POLICY=patchwam` for the simulator. Both rollout
+entry points fail before motion if `/metadata` identifies a different backend.
+Use `--expected-policy patchwam` explicitly when launching outside that overlay.
+There is no automatic GR00T fallback in the policy client. Startup prints a
+`policy_selected` event; `config.json` preserves full backend/checkpoint metadata,
+and agent tool diagnostics include `policy_backend` and `policy_chunk_steps`.
+The legacy tool name is not evidence of which backend executed a rollout.
+
+When `--action-steps` is omitted, execution uses the backend recommendation
+(16 for PatchWAM). Explicit values remain authoritative. Previously the agent
+defaulted to 8 while the atomic evaluator defaulted to 16, so the agent discarded
+half of each PatchWAM prediction before requesting another. Use identical action
+intervals, scenes and policy settings in paired baseline/agent comparisons.
+This cadence correction does not establish the cause of any particular failed
+grasp; inspect the saved metadata and replay matched scenes before drawing that
+conclusion. Predicted numerical actions and explicit instructions are unchanged.
+
 ## Build and CPU tests
 
 Run these commands on Thor from the repository root. No local laptop builds or

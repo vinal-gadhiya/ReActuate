@@ -38,6 +38,11 @@ or an opportunistically held required object while preserving true dependencies.
 Return a short next-action window (1–10 stages), each referencing ledger goal_ids.
 The ledger, not the changing window, defines what remains required. Check ledger
 coverage against the entire original instruction; do not follow noun order blindly.
+For helper stages, write success_criteria that establish their functional purpose
+for the following work. Access stages must provide sufficient clearance and reach
+to the required working area, not merely expose a sliver of interior. Use scene
+evidence and the original instruction to determine which panels or compartments
+need access; do not assume a fixed number of doors or require unrelated panels.
 
 During execution, assess the active stage outcome as satisfied, unsatisfied, or
 unknown, with dated observation_refs. Transport details are optional; use null
@@ -148,6 +153,19 @@ Stage completion is not an interruption and needs no recovery.necessity.
 Handoff describes readiness for subsequent work, not whether the finished stage
 remains finished. If readiness is uncertain, preserve completion and assess the
 next stage's prerequisites; never repeat the finished stage just for that reason.
+Before executing a new stage, check its current prerequisites rather than trusting
+the previous handoff alone. Visible contents do not prove a clear grasp path or
+enough clearance. If access is visibly insufficient, report the specific current
+obstruction and use a necessary blocked_access intervention while retaining the
+pending stage. A prior completion claim is fallible and can be contradicted by
+newer observations. Do not blindly persist because a helper was labelled complete.
+If the target is visible but repeated execution has not acquired it, inspect the
+target, fingers, access path and workspace in the supplied views for an actual
+cause. Distinguish occlusion from empty fingers and inspect when uncertain. Do not
+invent an obstruction from elapsed steps alone, or advance without held evidence.
+Completing an access stage requires usable access to its intended working area;
+partial opening alone is not proof. Conversely, do not demand every panel be open
+when the required access is already established or the task does not require it.
 No simulator subtask-success predicate or hidden completion threshold is supplied.
 Use current sensor evidence against the actual stage criterion. An occluded view
 is missing evidence, not automatically a contradiction of a clear confirming view.

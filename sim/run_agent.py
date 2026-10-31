@@ -4,6 +4,7 @@ import argparse
 from collections import deque
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import time
 import uuid
@@ -14,6 +15,7 @@ from core.agent import (parse_program, validate_decision, validate_plan, validat
                         validate_placement_destination, navigation_fixture)
 from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError, PolicyHTTPError
+from core.policy_config import resolve_policy_execution
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
@@ -127,6 +129,8 @@ class EpisodeTools:
                    for key, value in before.items()}
         image_change = float(np.mean(np.abs(self.observation[self.camera].astype(float) - image_before.astype(float))))
         self.last_diagnostics = {
+            'policy_backend': self.metadata.get('policy', 'unknown'),
+            'policy_chunk_steps': self.chunk_steps,
             'state_max_abs_changes': changes, 'image_mean_abs_change': image_change,
             'action_mean_abs': {key: float(np.mean([np.abs(action[key]).mean() for action in applied]))
                                 for key in applied[0]} if applied else {},
@@ -666,6 +670,8 @@ def main():
     parser.add_argument('--plan', type=Path, help='JSON plan for fixed mode or a controlled agent starting plan')
     parser.add_argument('--context-file', type=Path, help='Optional public task/scene notes JSON')
     parser.add_argument('--policy-url', default='http://inference:8000')
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'),
+                        help='Fail before motion if inference metadata identifies a different backend')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--seed', type=int, default=0)
@@ -673,7 +679,8 @@ def main():
     parser.add_argument('--max-steps', type=int)
     parser.add_argument('--execution-policy', choices=('episode', 'bounded'), default='episode',
                         help='episode: keep the committed stage until success/end or step budget; bounded: honor early stop/retry limits')
-    parser.add_argument('--action-steps', type=int, default=8)
+    parser.add_argument('--action-steps', type=int,
+                        help='Actions executed per prediction; default: backend recommendation, otherwise 8')
     parser.add_argument('--decision-steps', type=int, default=40)
     parser.add_argument('--max-decisions', type=int, default=40)
     parser.add_argument('--max-api-calls', type=int, default=60)
@@ -705,7 +712,7 @@ def main():
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    for key in ('episodes', 'action_steps', 'decision_steps', 'max_decisions', 'max_api_calls'):
+    for key in ('episodes', 'decision_steps', 'max_decisions', 'max_api_calls'):
         if getattr(args, key) <= 0:
             parser.error(f'{key} must be positive')
     if args.decision_steps > 80 or args.max_api_calls > 200 or args.max_replans < 0:
@@ -759,8 +766,13 @@ def main():
     metadata = policy.metadata()
     if metadata.get('data_config') != 'panda_omron' or metadata.get('embodiment') != 'PandaOmron':
         raise ValueError('A PandaOmron policy is required')
-    if args.action_steps > metadata['action_horizon']:
-        parser.error('Action steps exceed policy horizon')
+    args.action_steps = resolve_policy_execution(metadata, args.action_steps, args.expected_policy)
+    print(json.dumps({'event': 'policy_selected', 'policy_url': args.policy_url,
+                      'policy_backend': metadata.get('policy', 'unknown'),
+                      'expected_policy': args.expected_policy, 'action_steps': args.action_steps,
+                      'action_horizon': metadata['action_horizon'],
+                      'checkpoint': metadata.get('checkpoint_repo', metadata.get('checkpoint')),
+                      'source_ref': metadata.get('source_ref')}), flush=True)
     supervisor = SupervisorClient(args.supervisor_url, timeout=480) if args.mode == 'agent' else None
     supervisor_metadata = supervisor.metadata() if supervisor else None
     args.output.mkdir(parents=True, exist_ok=False)

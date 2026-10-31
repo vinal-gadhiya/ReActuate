@@ -2,15 +2,18 @@
 
 from http.server import ThreadingHTTPServer
 import threading
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
 
 from core.patchwam import CAMERAS, LANGUAGE, PatchWAMAdapter
 from core.policy_http import PolicyClient
+from core.policy_config import resolve_policy_execution
 from core.simulator_context import build_simulator_context
 from inference.serve import make_handler
 from sim.evaluate import make_policy_observation
+from sim.run_agent import EpisodeTools
 
 
 class FakeAPPolicy:
@@ -39,6 +42,38 @@ def observation():
 
 
 class PatchWAMTests(unittest.TestCase):
+    def test_backend_interval_preserves_actions_and_discards_old_instruction_tail(self):
+        policy = FakeAPPolicy()
+        engine, sensors, applied = PatchWAMAdapter(policy), observation(), []
+
+        class Env:
+            action_space = SimpleNamespace(spaces={f'action.{key}': SimpleNamespace(shape=(width,))
+                                                   for key, width in (
+                                                       ('base_motion', 4), ('control_mode', 1),
+                                                       ('end_effector_position', 3),
+                                                       ('end_effector_rotation', 3), ('gripper_close', 1))})
+
+            def step(self, action):
+                applied.append(np.concatenate(list(action.values())))
+                return sensors.copy(), 0, False, False, {'success': False}
+
+        class Client:
+            def predict(self, inputs):
+                return {**engine.predict(inputs), '__request_id': inputs['__request_id']}
+
+        tools = EpisodeTools(Env(), sensors, Client(), engine.metadata,
+                             SimpleNamespace(append_data=lambda frame: None), 30,
+                             resolve_policy_execution(engine.metadata, expected_policy='patchwam'))
+        tools.run_groot('Open the cabinet.', 20)
+        tools.run_groot('Pick up the mug.', 1)
+        np.testing.assert_array_equal(np.asarray(applied[:16]), policy.output)
+        np.testing.assert_array_equal(np.asarray(applied[16:20]), policy.output[:4])
+        np.testing.assert_array_equal(applied[20], policy.output[0])
+        self.assertEqual([request[2] for request in policy.requests],
+                         ['Open the cabinet.', 'Open the cabinet.', 'Pick up the mug.'])
+        self.assertEqual(tools.last_diagnostics['policy_backend'], 'patchwam')
+        self.assertEqual(tools.last_diagnostics['policy_chunk_steps'], 16)
+
     def test_official_dataset_order_and_raw_named_actions(self):
         policy = FakeAPPolicy()
         engine = PatchWAMAdapter(policy)

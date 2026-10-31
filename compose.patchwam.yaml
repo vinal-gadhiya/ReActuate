@@ -1,6 +1,9 @@
 # Optional overlay. Default compose.yaml and GR00T images/checkpoints stay intact.
 # docker compose -f compose.yaml -f compose.patchwam.yaml ...
 services:
+  sim:
+    environment:
+      EXPECTED_POLICY: patchwam
   inference:
     image: objectworld-patchwam:latest
     build:

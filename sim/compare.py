@@ -41,11 +41,15 @@ def run_command(args, condition, seed, output, plan=None):
     command = [sys.executable, '-m', 'sim.run_agent', '--task', args.task,
                '--split', args.split, '--seed', str(seed), '--episodes', '1',
                '--mode', 'baseline' if condition == 'baseline' else 'agent',
-               '--action-steps', str(args.action_steps), '--decision-steps', str(args.decision_steps),
+               '--decision-steps', str(args.decision_steps),
                '--max-decisions', str(args.max_decisions), '--max-api-calls', str(args.max_api_calls),
                '--max-replans', str(args.max_replans), '--policy-url', args.policy_url,
                '--supervisor-url', args.supervisor_url, '--output', str(output),
                '--sam' if condition == 'muse_sam' else '--no-sam']
+    if args.action_steps is not None:
+        command += ['--action-steps', str(args.action_steps)]
+    if getattr(args, 'expected_policy', None) is not None:
+        command += ['--expected-policy', args.expected_policy]
     if args.max_steps is not None:
         command += ['--max-steps', str(args.max_steps)]
     if args.context_file is not None:
@@ -214,7 +218,9 @@ def main():
     parser.add_argument('--tasks', nargs='+', help='Optional task-family suite; applies the same settings to every task')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--seeds', nargs='+', type=int, default=[0])
-    parser.add_argument('--action-steps', type=int, default=8)
+    parser.add_argument('--action-steps', type=int,
+                        help='Actions per prediction; default uses backend recommendation in every condition')
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'))
     parser.add_argument('--decision-steps', type=int, default=40)
     parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
                         help='Persistent episode summary or recent events only; object memory is retained in both')
@@ -258,7 +264,7 @@ def main():
         parser.error('Conditions must start with baseline, contain no duplicates, and run muse before muse_sam')
     if len(set(args.seeds)) != len(args.seeds):
         parser.error('Seeds must be unique')
-    if not (args.action_steps > 0 and 1 <= args.decision_steps <= 80
+    if not ((args.action_steps is None or args.action_steps > 0) and 1 <= args.decision_steps <= 80
             and args.max_decisions > 0 and 1 <= args.max_api_calls <= 200 and args.max_replans >= 0):
         parser.error('Invalid execution budgets')
     if args.max_steps is not None and args.max_steps <= 0:

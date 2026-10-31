@@ -96,6 +96,11 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(sam[sam.index('--plan') + 1], '/outputs/muse/episode-000/plan.json')
         for flag in ('--seed', '--max-steps', '--action-steps', '--decision-steps'):
             self.assertEqual(baseline[baseline.index(flag) + 1], sam[sam.index(flag) + 1])
+        args.action_steps, args.expected_policy = None, 'patchwam'
+        for condition in ('baseline', 'muse', 'muse_sam'):
+            command = run_command(args, condition, 3, Path('/outputs/test'))
+            self.assertNotIn('--action-steps', command)
+            self.assertEqual(command[command.index('--expected-policy') + 1], 'patchwam')
         args.hybrid_control, args.require_unseen_composite = True, True
         baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))

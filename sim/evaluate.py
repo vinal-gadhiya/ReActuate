@@ -3,6 +3,7 @@
 import argparse
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import time
 import uuid
@@ -10,6 +11,7 @@ import uuid
 import numpy as np
 
 from core.policy_http import PolicyClient
+from core.policy_config import resolve_policy_execution
 
 
 def make_policy_observation(observation, metadata, instruction=None):
@@ -48,16 +50,18 @@ def validate_actions(actions, action_space, horizon):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--policy-url', default='http://inference:8000')
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'))
     parser.add_argument('--task', default='OpenCabinet')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--episodes', type=int, default=1)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--action-steps', type=int, default=16)
+    parser.add_argument('--action-steps', type=int,
+                        help='Actions per prediction; default: backend recommendation, otherwise 16')
     parser.add_argument('--max-steps', type=int, help='Default: RoboCasa task horizon')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--output', type=Path, default=Path('/outputs/gr00t-open-cabinet'))
     args = parser.parse_args()
-    if args.episodes <= 0 or args.action_steps <= 0 or args.timeout <= 0:
+    if args.episodes <= 0 or args.timeout <= 0:
         parser.error('Episodes, action steps, and timeout must be positive')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
@@ -75,8 +79,10 @@ def main():
     metadata = client.metadata()
     if metadata['data_config'] != 'panda_omron' or metadata['embodiment'] != 'PandaOmron':
         raise ValueError('Expected a PandaOmron policy')
-    if args.action_steps > metadata['action_horizon']:
-        raise ValueError('--action-steps exceeds the policy action horizon')
+    args.action_steps = resolve_policy_execution(metadata, args.action_steps, args.expected_policy, default_steps=16)
+    print(json.dumps({'event': 'policy_selected', 'policy_backend': metadata.get('policy', 'unknown'),
+                      'expected_policy': args.expected_policy, 'action_steps': args.action_steps,
+                      'action_horizon': metadata['action_horizon'], 'policy_url': args.policy_url}), flush=True)
 
     # A run directory is never overwritten, including partial failed runs.
     args.output.mkdir(parents=True, exist_ok=False)
