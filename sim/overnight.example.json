@@ -1,0 +1,26 @@
+{
+  "common_args": [
+    "--expected-policy", "patchwam",
+    "--execution-policy", "episode",
+    "--max-steps", "4000",
+    "--decision-steps", "32",
+    "--max-decisions", "0",
+    "--max-api-calls", "0",
+    "--max-replans", "-1",
+    "--no-sam"
+  ],
+  "experiments": [
+    {"name": "buffet-dessert-seed0", "task": "ArrangeBuffetDessert", "seed": 0},
+    {"name": "beverage-sorting-seed0", "task": "BeverageSorting", "seed": 0},
+    {"name": "condiments-seed0", "task": "LineUpCondiments", "seed": 0},
+    {"name": "cool-cake-seed0", "task": "CoolBakedCake", "seed": 0},
+    {"name": "heat-water-seed0", "task": "HeatMultipleWater", "seed": 0},
+    {"name": "broil-fish-seed0", "task": "ToasterOvenBroilFish", "seed": 0},
+    {"name": "buffet-dessert-seed1", "task": "ArrangeBuffetDessert", "seed": 1},
+    {"name": "beverage-sorting-seed1", "task": "BeverageSorting", "seed": 1},
+    {"name": "condiments-seed1", "task": "LineUpCondiments", "seed": 1},
+    {"name": "cool-cake-seed1", "task": "CoolBakedCake", "seed": 1},
+    {"name": "heat-water-seed1", "task": "HeatMultipleWater", "seed": 1},
+    {"name": "broil-fish-seed1", "task": "ToasterOvenBroilFish", "seed": 1}
+  ]
+}

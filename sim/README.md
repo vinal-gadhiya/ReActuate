@@ -12,6 +12,9 @@ policy clients, rollout recording, task scoring, and experiment execution.
   fixed subtask schedule, or Muse-supervised execution. See [the agent guide](../inference/AGENT.md).
 - `compare.py`: sequential comparisons of GR00T, Muse, and Muse + SAM on matched
   scene seeds, with videos, traces, and aggregated task-success and latency results.
+- `batch.py`: sequential overnight queues, with per-experiment logs, wall-clock
+  timing, optional timeouts (disabled by default), and summaries updated after
+  each experiment. See [overnight runs](OVERNIGHT.md).
 
 Agent episodes retain semantic object memory across decisions and replans. Muse
 can request perception without motion, select a camera/target for SAM detection
@@ -55,7 +58,11 @@ committed atomic instruction until verified complete, a necessary evidence-backe
 intervention, simulator success/end, or the physical episode horizon. Use
 `--max-steps 2000` for a 2,000-step horizon. A burst is an observation interval;
 short failure/recovery limits and planned subtask ceilings do not end execution.
-Decision/API limits cap supervision; when exhausted, bounded policy bursts keep
+Decision/API limits cap supervision; set `--max-decisions 0 --max-api-calls 0`
+to keep supervision active without total decision or API-call caps. Set
+`--max-replans -1` to remove the recovery replan cap. The overnight example uses
+these options and a 4,000-step physical budget, with no wall-clock deadline.
+With finite decision/API limits, when exhausted, bounded policy bursts keep
 the unfinished committed stage without advancing unverified work. Invalid
 proposals and model stops also trigger logged continuation. A completed window
 still requires supervision to supply a valid next window; no new action is invented

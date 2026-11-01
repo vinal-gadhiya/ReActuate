@@ -13,6 +13,22 @@ from tests.test_goals import definitions, proposal, refs, stage, update
 
 
 class EpisodeExecutionTests(unittest.TestCase):
+    def test_zero_decision_budget_keeps_supervision_through_4000_physical_steps(self):
+        ledger, tools, events, plan = self.setup_episode('Pick up the bowl.', 4000)
+        limits = []
+
+        def decide(active_plan, index, spent, limit):
+            limits.append(limit)
+            result = proposal('continue', tools.steps, 'Pick up the bowl.')
+            result['program'] = f'run_groot(instruction="Pick up the bowl.", steps={limit})'
+            return result
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=0, max_replans=-1)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 4000)
+        self.assertEqual(len(limits), 125)
+        self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
+
     def test_output_limit_failures_retry_without_motion_then_end_cleanly(self):
         ledger, tools, events, plan = self.setup_episode('Pick up the bowl.')
 
