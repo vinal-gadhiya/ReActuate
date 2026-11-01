@@ -18,9 +18,10 @@ class PolicyHTTPError(RuntimeError):
 
 
 class RetryableSupervisorError(RuntimeError):
-    def __init__(self, message, api_calls=1, audit=None):
+    def __init__(self, message, api_calls=1, audit=None, allow_policy_continuation=True):
         super().__init__(message)
         self.api_calls, self.audit = api_calls, audit or []
+        self.allow_policy_continuation = allow_policy_continuation
 
 
 def encode_arrays(values):
@@ -89,13 +90,16 @@ class SupervisorClient(PolicyClient):
                 detail = {}
             if error.status in (502, 503, 504) and detail.get('retryable') is True:
                 calls = detail.get('api_calls', 1)
-                if type(calls) is not int or not 1 <= calls <= 2:
+                if type(calls) is not int or not 1 <= calls <= context.get('api_calls_left', 200):
                     raise ValueError('Invalid supervisor failure call count') from error
+                allow_motion = detail.get('allow_policy_continuation', True)
+                if type(allow_motion) is not bool:
+                    raise ValueError('Invalid supervisor continuation permission') from error
                 raise RetryableSupervisorError(str(detail.get('error', 'Supervisor unavailable')),
-                                               calls, detail.get('audit', [])) from error
+                                               calls, detail.get('audit', []), allow_motion) from error
             raise
         except (URLError, TimeoutError, ConnectionError) as error:
-            # A missing response may hide both SAM and Muse attempts. Reserve the
-            # maximum allowed by this request rather than refunding unknown usage.
-            calls = min(context.get('api_calls_left', 1), 2 if context.get('use_sam', True) else 1)
+            # Review, SAM, planning, confirmation and one output-limit retry may
+            # have run. Reserve a conservative bound when the response is lost.
+            calls = min(context.get('api_calls_left', 1), 5)
             raise RetryableSupervisorError(f'Supervisor connection failed ({type(error).__name__})', calls) from error

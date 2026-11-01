@@ -27,6 +27,79 @@ def confirmation(verdict='confirmed', status='observed'):
 
 
 class BoundaryReviewTests(unittest.TestCase):
+    @staticmethod
+    def output_limit_error():
+        error = MetaAPIError('output limit', retryable=True, kind='output_limit',
+                             allow_policy_continuation=False)
+        error.audit = [{'response_id': 'truncated', 'status': 'incomplete',
+                        'usage': {'output_tokens': 4096}, 'max_output_tokens': 4096}]
+        return error
+
+    def test_truncated_confirmation_retries_within_budget_and_preserves_usage(self):
+        calls = []
+        truncated = self.output_limit_error()
+
+        class API:
+            max_output_tokens = 4096
+
+            def response(self, model, content, **kwargs):
+                calls.append(kwargs)
+                if len(calls) == 1:
+                    return {'assessment': assessment()}, {'model': model}
+                if len(calls) == 2:
+                    raise truncated
+                return confirmation(), {'model': model}
+
+        reply = Supervisor(API(), 'muse').handle('decide', self.context(3), self.images())
+        self.assertEqual(reply['result']['status'], 'complete')
+        self.assertEqual(reply['api_calls'], 3)
+        self.assertEqual(reply['audit'][1]['role'], 'output_limit')
+        self.assertEqual(reply['audit'][1]['usage']['output_tokens'], 4096)
+        self.assertEqual(calls[2]['max_output_tokens'], 8192)
+        self.assertEqual(calls[1]['schema'], calls[2]['schema'])
+
+    def test_repeated_truncation_is_bounded_and_disallows_policy_continuation(self):
+        for budget, expected_calls in ((2, 1), (4, 2)):
+            calls = []
+            make_error = self.output_limit_error
+
+            class API:
+                def response(self, *args, **kwargs):
+                    calls.append(kwargs)
+                    raise make_error()
+
+            with self.subTest(budget=budget), self.assertRaises(MetaAPIError) as caught:
+                Supervisor(API(), 'muse').handle('decide', self.context(budget), self.images())
+            self.assertEqual(len(calls), expected_calls)
+            self.assertEqual(caught.exception.api_calls, expected_calls)
+            self.assertEqual(len(caught.exception.audit), expected_calls)
+            self.assertFalse(caught.exception.allow_policy_continuation)
+
+    def test_planner_truncation_after_negative_review_retries_without_losing_review(self):
+        calls = []
+        truncated = self.output_limit_error()
+
+        class API:
+            max_output_tokens = 4096
+
+            def response(self, model, content, **kwargs):
+                calls.append((content, kwargs))
+                if len(calls) == 1:
+                    review = assessment('unsatisfied')
+                    review['evidence'] = 'Another object is held; the target remains on its support.'
+                    return {'assessment': review}, {'model': model}
+                if len(calls) == 2:
+                    raise truncated
+                return proposal('continue', 32, 'Pick up the mug.'), {'model': model}
+
+        reply = Supervisor(API(), 'muse').handle('decide', self.context(3), self.images())
+        self.assertEqual(reply['api_calls'], 3)
+        self.assertEqual(reply['boundary_review']['assessment']['outcome'], 'unsatisfied')
+        self.assertEqual(calls[1][0], calls[2][0])
+        self.assertEqual(reply['audit'][0]['role'], 'boundary_review')
+        self.assertEqual(reply['audit'][1]['role'], 'output_limit')
+
+
     def context(self, budget=3):
         active = step('a', 'Pick up the mug.')
         active['success_criteria'] = 'Mug supported by gripper and separated from source support.'

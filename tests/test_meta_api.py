@@ -13,6 +13,48 @@ from inference.meta_api import MetaAPI, MetaAPIError, output_text
 
 
 class MetaAPITests(unittest.TestCase):
+    def test_output_limit_preserves_usage_without_accepting_partial_json(self):
+        truncated = {'id': 'truncated-1', 'status': 'incomplete',
+                     'incomplete_details': {'reason': 'max_output_tokens'},
+                     'usage': {'output_tokens': 8192},
+                     'output': [{'type': 'message', 'content': [
+                         {'type': 'output_text', 'text': '{"program":"unsafe partial'}]}]}
+        with patch.dict(os.environ, {'MODEL_API_KEY': 'test-key'}):
+            api = MetaAPI()
+        with patch('inference.meta_api.urlopen', return_value=BytesIO(json.dumps(truncated).encode())):
+            with self.assertRaises(MetaAPIError) as caught:
+                api.response('muse', [], schema={})
+        error = caught.exception
+        self.assertTrue(error.retryable)
+        self.assertFalse(error.allow_policy_continuation)
+        self.assertEqual(error.kind, 'output_limit')
+        self.assertEqual(error.audit[0]['usage'], {'output_tokens': 8192})
+        self.assertNotIn('output', error.audit[0])
+
+    def test_output_limit_override_does_not_change_default_or_sam_requests(self):
+        complete = {'status': 'completed', 'output': [{'type': 'message', 'content': [
+            {'type': 'output_text', 'text': '{}'}]}]}
+        with patch.dict(os.environ, {'MODEL_API_KEY': 'test-key', 'META_MAX_OUTPUT_TOKENS': '4096'}):
+            api = MetaAPI()
+        for override, expected in ((8192, 8192), (None, 4096)):
+            with patch('inference.meta_api.urlopen', return_value=BytesIO(json.dumps(complete).encode())) as post:
+                api.response('muse', [], max_output_tokens=override)
+                self.assertEqual(json.loads(post.call_args.args[0].data)['max_output_tokens'], expected)
+        self.assertEqual(api.max_output_tokens, 4096)
+
+    def test_supervisor_failure_accounts_for_more_than_two_calls_and_blocks_motion(self):
+        client = SupervisorClient('http://supervisor')
+        detail = {'error': 'output limit', 'retryable': True, 'api_calls': 4,
+                  'allow_policy_continuation': False}
+        with patch.object(client, '_request', side_effect=PolicyHTTPError(502, json.dumps(detail))):
+            with self.assertRaises(RetryableSupervisorError) as caught:
+                client.ask('decide', {'api_calls_left': 4}, {})
+        self.assertEqual(caught.exception.api_calls, 4)
+        self.assertFalse(caught.exception.allow_policy_continuation)
+        with patch.object(client, '_request', side_effect=PolicyHTTPError(502, json.dumps(detail))):
+            with self.assertRaises(ValueError):
+                client.ask('decide', {'api_calls_left': 3}, {})
+
     def test_connection_errors_are_retryable_without_leaking_reason_text(self):
         with patch.dict(os.environ, {'MODEL_API_KEY': 'test-key'}):
             api = MetaAPI()

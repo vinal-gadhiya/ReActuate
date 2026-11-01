@@ -146,6 +146,13 @@ initial policy RNG state. Bitwise deterministic GPU inference is not guaranteed.
 
 ## Container-only tests
 
+Muse output-limit failures (`incomplete`, `max_output_tokens`) get at most one
+retry per supervisor request, within the shared API-call budget. The retry doubles
+the configured output allowance up to 16,384 tokens and requests concise JSON.
+Truncated text is never executed; its available token usage is retained in the
+audit. If no retry fits or it fails, the runner requests a fresh decision without
+policy motion and stops cleanly if the supervisor failure limit is exceeded.
+
 Run the lightweight protocol/adapter tests with the source mounted read-only:
 
 ```bash

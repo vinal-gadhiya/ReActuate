@@ -6,12 +6,55 @@ from core.agent import validate_decision
 from core.atomic_language import AtomicInstructionGrounder
 from core.execution import validate_stage_switch
 from core.goals import AttemptHistory, GoalLedger
+from core.policy_http import RetryableSupervisorError
 from sim.run_agent import run_subtasks
 from tests.test_agent import FakeTools, decision
 from tests.test_goals import definitions, proposal, refs, stage, update
 
 
 class EpisodeExecutionTests(unittest.TestCase):
+    def test_output_limit_failures_retry_without_motion_then_end_cleanly(self):
+        ledger, tools, events, plan = self.setup_episode('Pick up the bowl.')
+
+        def decide(*args):
+            raise RetryableSupervisorError('output limit', allow_policy_continuation=False)
+
+        reason = self.run_episode(ledger, tools, events, plan, decide,
+                                  max_decisions=10, max_supervisor_failures=2)
+        self.assertEqual(reason, 'supervisor_failure_limit')
+        self.assertEqual(tools.steps, 0)
+        self.assertEqual(tools.instructions, [])
+        self.assertEqual(len([event for event in events if event['event'] == 'supervisor_unavailable']), 3)
+
+    def test_output_limit_cannot_fall_through_to_motion_when_decision_budget_expires(self):
+        ledger, tools, events, plan = self.setup_episode('Pick up the bowl.')
+
+        def decide(*args):
+            raise RetryableSupervisorError('output limit', allow_policy_continuation=False)
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=1)
+        self.assertEqual(reason, 'decision_budget')
+        self.assertEqual(tools.steps, 0)
+        self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
+
+    def test_fresh_valid_decision_can_resume_after_output_limit_without_blind_motion(self):
+        ledger, tools, events, plan = self.setup_episode('Pick up the bowl.', 32)
+        observed_steps = []
+
+        def decide(*args):
+            observed_steps.append(tools.steps)
+            if len(observed_steps) == 1:
+                raise RetryableSupervisorError('output limit', allow_policy_continuation=False)
+            result = proposal('continue', tools.steps, 'Pick up the bowl.')
+            result['program'] = 'run_groot(instruction="Pick up the bowl.", steps=32)'
+            return result
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=5)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(observed_steps, [0, 0])
+        self.assertEqual(tools.instructions, ['Pick up the bowl.'])
+        self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
+
     def setup_episode(self, instruction, max_steps=2000):
         ledger = GoalLedger('Required outcomes', [definitions()[0]])
         tools, events = FakeTools(), []
