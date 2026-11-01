@@ -38,6 +38,7 @@ def run_command(args, condition, seed, output, plan=None):
     command = [sys.executable, '-m', 'sim.run_agent', '--task', args.task,
                '--split', args.split, '--seed', str(seed), '--episodes', '1',
                '--mode', 'baseline' if condition == 'baseline' else 'agent',
+               '--execution-policy', getattr(args, 'execution_policy', 'episode'),
                '--action-steps', str(args.action_steps), '--decision-steps', str(args.decision_steps),
                '--max-decisions', str(args.max_decisions), '--max-api-calls', str(args.max_api_calls),
                '--max-replans', str(args.max_replans), '--policy-url', args.policy_url,
@@ -162,6 +163,7 @@ def main():
     parser.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS),
                         help='Ordered conditions; baseline must be first, muse precedes muse_sam')
     parser.add_argument('--max-steps', type=int)
+    parser.add_argument('--execution-policy', choices=('episode', 'bounded'), default='episode')
     parser.add_argument('--context-file', type=Path)
     parser.add_argument('--policy-url', default='http://inference:8000')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
@@ -178,7 +180,7 @@ def main():
     if len(set(args.seeds)) != len(args.seeds):
         parser.error('Seeds must be unique')
     if not (args.action_steps > 0 and 1 <= args.decision_steps <= 80
-            and args.max_decisions > 0 and 1 <= args.max_api_calls <= 200 and args.max_replans >= 0):
+            and args.max_decisions >= 0 and args.max_api_calls >= 0 and args.max_replans >= -1):
         parser.error('Invalid execution budgets')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')

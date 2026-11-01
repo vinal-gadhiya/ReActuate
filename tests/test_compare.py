@@ -38,6 +38,10 @@ class CompareTests(unittest.TestCase):
         baseline = run_command(args, 'baseline', 3, Path('/outputs/base'))
         muse = run_command(args, 'muse', 3, Path('/outputs/muse'))
         sam = run_command(args, 'muse_sam', 3, Path('/outputs/sam'), Path('/outputs/muse/episode-000/plan.json'))
+        self.assertEqual(muse[muse.index('--execution-policy') + 1], 'episode')
+        args.execution_policy = 'bounded'
+        bounded = run_command(args, 'muse', 3, Path('/outputs/bounded'))
+        self.assertEqual(bounded[bounded.index('--execution-policy') + 1], 'bounded')
         self.assertIn('--no-sam', muse)
         self.assertIn('--sam', sam)
         self.assertEqual(sam[sam.index('--subtask-budget-mode') + 1], 'episode')

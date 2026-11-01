@@ -148,7 +148,7 @@ class SceneMemory:
                                   'Compare appearance and fixture-relative locations before replacing a referent; '
                                   'a changed location may reflect viewpoint, wording, motion, or misidentification.'}
 
-    def authorize_navigation(self, fixture, limit):
+    def authorize_navigation(self, fixture, limit, enforce_stall=True):
         if not re.search(r'\b(sink|fridge|refrigerator|oven|microwave|dishwasher|coffee machine|cabinet|'
                          r'stove|hood|toaster|electric kettle|stand mixer|counter|table)\b', fixture.casefold()):
             raise ValueError('Navigation target must name a catalog-supported fixture, not a position or object')
@@ -167,9 +167,9 @@ class SceneMemory:
                              'or an exact fixture name in the original task description')
         if not self.assessment or not self.assessment['information_needed'].strip():
             raise ValueError('Navigation requires an explicit information need')
-        if self.navigation_bursts >= limit:
+        if limit is not None and self.navigation_bursts >= limit:
             raise ValueError('Navigation burst budget exhausted')
-        if self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
+        if enforce_stall and self.last_navigation == fixture.casefold().strip() and self.stall_streak >= 2:
             raise ValueError('Repeated navigation to the same fixture is stalled')
 
     def task_names_fixture(self, fixture):

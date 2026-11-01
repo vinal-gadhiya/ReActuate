@@ -351,6 +351,16 @@ class Supervisor:
         prompt = '\n\n'.join([IN_CONTEXT_PLANNING_PROMPT, OUTCOME_SUPERVISION_PROMPT,
                                 MEMORY_PROMPT, INSTRUCTION_PROMPT, CONTEXT_PROMPT,
                                 PLAN_PROMPT if operation == 'plan' else DECIDE_PROMPT, FLEXIBLE_PLAN_PROMPT])
+        if context.get('execution_policy') == 'episode':
+            prompt += ('\nEPISODE EXECUTION OVERRIDE: The simulator owns task termination. A stop or final-stage '
+                       'complete response cannot terminate the episode. Continue observing and planning toward '
+                       'the original goal until the physical horizon. Total decision/API/replan/navigation caps '
+                       'are disabled; null remaining limits mean unlimited, and api_calls_left is a fresh '
+                       'per-request allowance. Per-program step limits and structural validation still apply. '
+                       'Replan when a prerequisite or held object changes. If planning_window_exhausted is true, '
+                       'the prior plan is a completed visual claim, not an episode termination: provide new stages for remaining '
+                       'original requirements, using new IDs. Do not repeat completed stages or claim overall '
+                       'success from a visual assessment. This override takes precedence over earlier stop guidance.')
         if context.get('control_owner') == 'patchwam':
             # Keep the established tool schema; only its selected executor changes.
             prompt = prompt.replace('GR00T', 'PatchWAM')

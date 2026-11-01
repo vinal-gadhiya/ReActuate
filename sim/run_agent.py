@@ -201,7 +201,10 @@ def handoff_context(plan, index, history):
 def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decisions=40, max_replans=2,
                  subtask_budget_mode='plan', scene_memory=None, max_navigation_bursts=6, stall_bursts=4,
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
-                 concise_instructions=False, max_stop_continuations=None):
+                 concise_instructions=False, max_stop_continuations=None, execution_policy='bounded'):
+    if execution_policy not in ('bounded', 'episode'):
+        raise ValueError('Unknown execution policy')
+    persistent = mode == 'agent' and execution_policy == 'episode'
     if supervisor_stop_policy not in ('halt', 'continue'):
         raise ValueError('Unknown supervisor stop policy')
     if max_supervisor_failures < 0:
@@ -215,11 +218,51 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
     last_inspection, repeated_inspections = None, 0
     consecutive_stop_continuations = 0
     memory = scene_memory if scene_memory is not None else SceneMemory()
+    window_exhausted = False
+    blocked_transitions = 0
+    last_supervised_step, no_motion_cycles = None, 0
+
+    def continue_policy(reason, original=False):
+        """Advance physics without accepting a model stop or completion as task success."""
+        nonlocal spent, last_transfer
+        if not persistent or tools.done:
+            return False
+        active = plan[index]
+        instruction = (memory.original_goal if original or window_exhausted else
+                       last_transfer[1] if last_transfer is not None and last_transfer[0] == active['id']
+                       else active['instruction'])
+        if not instruction:
+            raise RuntimeError('Original task instruction required after the execution window is complete')
+        burst = min(decision_steps, tools.max_steps - tools.steps)
+        before = tools.steps
+        record({'event': 'policy_continuation', 'subtask': active['id'], 'step': before,
+                'reason': reason, 'instruction': instruction, 'steps': burst,
+                'note': 'No stage completion or task success is inferred; request a fresh decision after this burst.'})
+        tools.run_groot(instruction=instruction, steps=burst)
+        if tools.steps <= before and not tools.done:
+            raise RuntimeError('Policy execution made no simulator steps')
+        diagnostics = getattr(tools, 'last_diagnostics', {})
+        memory.note_motion(instruction, diagnostics)
+        spent += tools.steps - before
+        if not original and not window_exhausted:
+            last_transfer = (active['id'], instruction)
+        record({'event': 'tool', 'subtask': active['id'], 'tool': 'run_groot',
+                'arguments': {'instruction': instruction, 'steps': burst},
+                'step_before': before, 'step_after': tools.steps,
+                'continuation_reason': reason, 'diagnostics': diagnostics})
+        return True
+
     while not tools.done and index < len(plan):
+        if persistent:
+            no_motion_cycles = no_motion_cycles + 1 if tools.steps == last_supervised_step else 0
+            last_supervised_step = tools.steps
+            if no_motion_cycles >= 3:
+                continue_policy('repeated_supervision_without_motion', original=blocked_transitions > 0)
+                continue
         supervisor_unavailable = False
         step = plan[index]
         remaining = tools.max_steps - tools.steps
-        if mode != 'agent' or subtask_budget_mode == 'plan':
+        if mode != 'agent' or (subtask_budget_mode == 'plan' and not persistent):
             remaining = min(step['max_steps'] - spent, remaining)
         if mode != 'agent':
             if remaining <= 0:
@@ -232,7 +275,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 'replacement_steps': [],
             }
         else:
-            if decisions >= max_decisions:
+            if not persistent and max_decisions and decisions >= max_decisions:
                 return 'decision_budget'
             decisions += 1
             try:
@@ -243,6 +286,9 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'supervisor_unavailable', 'step': tools.steps, 'subtask': step['id'],
                         'error': str(error), 'consecutive_failures': supervisor_failures,
                         'failure_limit': max_supervisor_failures})
+                if persistent:
+                    continue_policy('supervisor_unavailable')
+                    continue
                 if supervisor_failures > max_supervisor_failures:
                     return 'supervisor_failure_limit'
                 if last_transfer is None or last_transfer[0] != step['id']:
@@ -256,6 +302,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                             'program': f'run_groot(instruction={instruction!r}, steps={min(16, decision_steps, remaining)})',
                             'replacement_steps': []}
             if decision is None:
+                if continue_policy('supervision_unavailable'):
+                    continue
                 return 'api_budget'
             try:
                 if not supervisor_unavailable:
@@ -266,6 +314,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 record({'event': 'invalid_decision', 'step': tools.steps, 'reason': str(error),
                         'proposal': decision, 'consecutive_rejections': invalid_decisions,
                         'feedback': 'No motion or memory updates executed. Correct this proposal using available tools and current limits.'})
+                if continue_policy('invalid_decision'):
+                    continue
                 if invalid_decisions >= 3:
                     return 'invalid_decision_limit'
                 continue
@@ -281,9 +331,15 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 transport.update(decision['assessment'], decision['memory_updates'])
             record({'event': 'transport_control', 'step': tools.steps, **transport.context()})
             if transport.loss_detected:
+                if continue_policy('object_loss_reported'):
+                    continue
                 return 'object_loss_reported'
         status = decision['status']
+        if status != 'complete':
+            blocked_transitions = 0
         if status == 'stop':
+            if continue_policy('supervisor_stop'):
+                continue
             if supervisor_stop_policy == 'halt':
                 return 'supervisor_stop'
             if last_transfer is None or last_transfer[0] != step['id'] or remaining <= 0:
@@ -308,6 +364,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             repeated_inspections = repeated_inspections + 1 if inspection == last_inspection else 1
             last_inspection = inspection
             if repeated_inspections >= 3:
+                if continue_policy('repeated_inspection_without_motion'):
+                    continue
                 return 'perception_stall'
             if hasattr(tools, 'refresh_observation'):
                 tools.refresh_observation()
@@ -318,24 +376,43 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                         'next_subtask': plan[index + 1]['id'], 'step': tools.steps,
                         'reason': 'Next-step prerequisites have not been visually established.',
                         'handoff': decision['handoff']})
+                blocked_transitions += 1
+                if persistent and blocked_transitions >= 3:
+                    continue_policy('blocked_handoff', original=True)
                 continue
+            blocked_transitions = 0
             if mode == 'agent':
                 record({'event': 'subtask_transition', 'subtask': step['id'],
                         'completed_step': dict(step), 'step': tools.steps,
                         'completion_evidence': decision['evidence'], 'handoff': decision['handoff']})
+            if persistent and index + 1 == len(plan):
+                window_exhausted = True
+                record({'event': 'planning_window_exhausted', 'subtask': step['id'], 'step': tools.steps,
+                        'reason': 'All planned stages are claimed complete. This claim cannot terminate the episode. '
+                                  'Reassess original requirements and replan remaining work without replaying completed stages.'})
+                continue_policy('final_completion_unverified', original=True)
+                continue
             index, spent = index + 1, 0
             continue
         if status == 'replan':
-            if replans >= max_replans:
+            if not persistent and max_replans >= 0 and replans >= max_replans:
                 return 'replan_budget'
             replacement = decision['replacement_steps']
-            completed_ids = {item['id'] for item in plan[:index]}
+            prefix = plan[:index + 1] if window_exhausted else plan[:index]
+            completed_ids = {item['id'] for item in prefix}
             if completed_ids & {item['id'] for item in replacement}:
+                if continue_policy('reused_completed_stage_id'):
+                    continue
                 raise ValueError('Replan reused a completed subtask ID')
-            plan = plan[:index] + replacement
+            plan = prefix + replacement
+            index = len(prefix)
             record({'event': 'plan_replaced', 'subtask': step['id'], 'step': tools.steps,
                     'steps': [dict(item) for item in plan], 'reason': decision['evidence']})
             replans, spent = replans + 1, 0
+            window_exhausted = False
+            continue
+        if persistent and window_exhausted:
+            continue_policy('completed_window_requires_replan', original=True)
             continue
         commands = parse_program(decision['program'], min(decision_steps, remaining), tools.allow_gripper,
                                  getattr(tools, 'allow_vertical', False))
@@ -347,7 +424,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             if transport is not None:
                 transport.authorize_program(commands)
             navigation_count = sum(name == 'navigate' for name, _ in commands)
-            if mode == 'agent' and memory.navigation_bursts + navigation_count > max_navigation_bursts:
+            if mode == 'agent' and not persistent and memory.navigation_bursts + navigation_count > max_navigation_bursts:
                 raise ValueError('Navigation burst budget exhausted')
             for name, arguments in commands:
                 if transport is not None:
@@ -355,16 +432,19 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     if name == 'move_vertical' and abs(arguments['distance']) / arguments['steps'] > 0.002 + 1e-9:
                         raise ValueError('Use at least one control step per 2 mm of vertical motion')
                 if name == 'navigate':
-                    memory.authorize_navigation(arguments['fixture'], max_navigation_bursts)
+                    memory.authorize_navigation(arguments['fixture'], None if persistent else max_navigation_bursts,
+                                                enforce_stall=not persistent)
                 if (mode == 'agent' and name == 'run_groot'
                         and arguments['instruction'].strip().casefold().startswith('navigate ')):
                     raise ValueError('Use navigate(fixture=..., steps=...) for guarded navigation')
-                if (mode == 'agent' and stall_bursts and memory.stall_streak >= stall_bursts
+                if (mode == 'agent' and not persistent and stall_bursts and memory.stall_streak >= stall_bursts
                         and name == 'run_groot' and arguments['instruction'] == memory.last_instruction):
                     raise ValueError('Stationary policy: choose information gathering, a distinct supported recovery, or stop')
         except ValueError as error:
             rejected += 1
             record({'event': 'recovery_required', 'step': tools.steps, 'reason': str(error)})
+            if continue_policy('rejected_action: ' + str(error)):
+                continue
             if rejected >= 2:
                 return 'recovery_unavailable'
             continue
@@ -430,6 +510,8 @@ def main():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=1)
     parser.add_argument('--max-steps', type=int)
+    parser.add_argument('--execution-policy', choices=('episode', 'bounded'), default='episode',
+                        help='episode: simulator success/end or physical horizon; bounded: original 244b087 early exits')
     parser.add_argument('--action-steps', type=int, default=8)
     parser.add_argument('--decision-steps', type=int, default=40)
     parser.add_argument('--max-decisions', type=int, default=40)
@@ -456,11 +538,15 @@ def main():
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    for key in ('episodes', 'action_steps', 'decision_steps', 'max_decisions', 'max_api_calls'):
+    for key in ('episodes', 'action_steps', 'decision_steps'):
         if getattr(args, key) <= 0:
             parser.error(f'{key} must be positive')
-    if args.decision_steps > 80 or args.max_api_calls > 200 or args.max_replans < 0:
-        parser.error('Decision steps <= 80, API calls <= 200, and replans >= 0 are required')
+    if args.decision_steps > 80 or args.max_decisions < 0 or args.max_api_calls < 0 or args.max_replans < -1:
+        parser.error('Decision steps <= 80, decision/API budgets >= 0, and replans >= -1 are required')
+    if args.execution_policy == 'episode' and args.mode == 'agent':
+        args.max_decisions = args.max_api_calls = 0
+        args.max_replans = -1
+        args.subtask_budget_mode = 'episode'
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
     if args.max_supervisor_failures < 0:
@@ -538,7 +624,7 @@ def main():
                     json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
+            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'policy_continuation', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 
@@ -571,7 +657,7 @@ def main():
 
             def ask(operation, context):
                 nonlocal api_calls, request_number, previous_images
-                if api_calls >= args.max_api_calls:
+                if args.max_api_calls and api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
                 images = dict(current)
@@ -594,10 +680,16 @@ def main():
                     np.savez_compressed(directory / clip_file, **clips, steps=np.asarray(clip_steps))
                     references.append({'label': 'temporal camera samples', 'path': clip_file})
                 decisions_used = sum(item['event'] in ('decision', 'invalid_decision', 'supervisor_unavailable') for item in history)
-                decisions_left = max(0, args.max_decisions - decisions_used)
-                calls_left = args.max_api_calls - api_calls
-                motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
+                persistent = args.mode == 'agent' and args.execution_policy == 'episode'
+                decisions_left = max(0, args.max_decisions - decisions_used) if args.max_decisions else None
+                calls_left = min(200, args.max_api_calls - api_calls) if args.max_api_calls else 200
+                motion_bound = (max_steps - tools.steps if persistent else
+                                min(max_steps - tools.steps, min(decisions_left if decisions_left is not None else calls_left,
+                                                                 calls_left) * args.decision_steps))
                 context.update({
+                    'execution_policy': args.execution_policy,
+                    'planning_window_exhausted': next((item['event'] for item in reversed(history)
+                        if item['event'] in ('planning_window_exhausted', 'plan_replaced')), None) == 'planning_window_exhausted',
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
@@ -606,8 +698,8 @@ def main():
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
                     'clip_steps': clip_steps,
-                    'navigation_bursts_left': max(0, args.max_navigation_bursts - memory.navigation_bursts),
-                    'replans_left': max(0, args.max_replans - sum(
+                    'navigation_bursts_left': None if persistent else max(0, args.max_navigation_bursts - memory.navigation_bursts),
+                    'replans_left': None if args.max_replans < 0 else max(0, args.max_replans - sum(
                         item['event'] == 'decision' and item.get('status') == 'replan' for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'recent_motion': [{
@@ -617,8 +709,10 @@ def main():
                         'note': 'Kinematic changes, not task-progress labels; compare with the images.',
                     } for item in [entry for entry in history if entry['event'] == 'tool'][-5:]],
                     'remaining_execution_options': {
-                        'run_groot': tools.steps < max_steps and decisions_left > 0 and calls_left > 0,
-                        'scope': 'Zero navigation/replan budgets disable only those operations, not the current policy transfer.',
+                        'run_groot': tools.steps < max_steps and (decisions_left is None or decisions_left > 0) and calls_left > 0,
+                        'scope': ('Episode mode has no aggregate supervision, navigation or replan caps; '
+                                  'per-program limits remain.' if persistent else
+                                  'Zero navigation/replan budgets disable only those operations, not the current policy transfer.'),
                     },
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
@@ -629,7 +723,7 @@ def main():
                     'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
-                                     'navigate': memory.navigation_bursts < args.max_navigation_bursts,
+                                     'navigate': persistent or memory.navigation_bursts < args.max_navigation_bursts,
                                      'inspect': True,
                                      'sam': args.sam if args.sam is not None else supervisor_metadata['sam_enabled']},
                     'execution_limits': {
@@ -638,6 +732,8 @@ def main():
                         'decision_steps': args.decision_steps, 'decisions_left': decisions_left,
                         'policy_chunk_steps': args.action_steps,
                         'api_calls_left': calls_left, 'motion_step_upper_bound': motion_bound,
+                        'unlimited_total_supervision': persistent,
+                        'api_call_allowance_scope': 'per_request' if args.max_api_calls == 0 else 'remaining_episode_capped_to_200',
                         'note': 'Optimistic bound: verification, planning, SAM, and replanning consume API calls too.',
                     },
                     'robot_measurements': {
@@ -738,10 +834,12 @@ def main():
                     args.max_supervisor_failures,
                     concise_instructions=True,
                     max_stop_continuations=args.max_stop_continuations,
+                    execution_policy=args.execution_policy,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
                     'success': tools.success, 'stop_reason': reason, 'steps': tools.steps,
+                    'execution_policy': args.execution_policy,
                     'api_calls': api_calls, 'wall_seconds': time.monotonic() - started,
                     'inference_seconds': tools.inference_seconds, 'original_goal': goal,
                     'scene_identity': scene['identity'],
@@ -770,6 +868,7 @@ def main():
                 env.close()
     summary = {
         'task': args.task, 'mode': args.mode, 'episodes': len(results),
+        'execution_policy': args.execution_policy,
         'successes': sum(item['success'] for item in results),
         'success_rate': sum(item['success'] for item in results) / len(results),
         'evaluation': 'Custom diagnostic; success is the environment task check, not Muse verification.',

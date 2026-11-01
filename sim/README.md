@@ -1,5 +1,11 @@
 # Simulation
 
+On `experiment/244b087-simulator-termination`, the CLIs default to simulator-owned
+episode termination while preserving the older single-planner architecture.
+See [the experimental behavior and Thor commands](SIMULATOR_TERMINATION.md).
+The older early-exit behavior described below remains available with
+`--execution-policy bounded`.
+
 Own RoboCasa/MuJoCo setup, environment lifecycle, rendering, simulator-side
 policy clients, rollout recording, task scoring, and experiment execution.
 
