@@ -30,6 +30,9 @@ class AtomicLanguageTests(unittest.TestCase):
             ('Navigate to the dining counter.', 'navigate'),
             ('Turn on the sink faucet.', 'turn_on'),
             ('Pick up the mug and place it on the tray.', 'transfer_on'),
+            ('Pick the croissant from the white plate and place it on the tray.', 'transfer_from_on'),
+            ('Pick the mug from the counter and place it in the cabinet.', 'transfer_from_in'),
+            ('Pick the mug from the tray and place it under the coffee machine dispenser.', 'transfer_from_under'),
         ):
             with self.subTest(instruction=instruction):
                 match = self.grounder.validate(instruction)
@@ -60,6 +63,7 @@ class AtomicLanguageTests(unittest.TestCase):
             'Pick up the {object}.', 'Pick up the mug. Then close the cabinet.',
             'Place the mug on the tray and open the cabinet.',
             'Pick up the mug and lift the gripper.',
+            'Pick the mug from the counter and place it on the tray and close the cabinet.',
         ):
             with self.subTest(instruction=instruction), self.assertRaises(ValueError):
                 self.grounder.validate(instruction)

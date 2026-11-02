@@ -1,6 +1,7 @@
 """Public temporal evidence and validation for task-independent stage reviews."""
 
 from copy import deepcopy
+import re
 
 from core.goals import camera_key
 from core.scene_memory import ASSESSMENT_SCHEMA, record_schema, validate_scene_fields
@@ -18,6 +19,37 @@ CONFIRMATION_SCHEMA = record_schema({
         'observation_refs': ASSESSMENT_SCHEMA['properties']['observation_refs'],
     })},
 })
+OPENING_CONFIRMATION_SCHEMA = record_schema({
+    **deepcopy(CONFIRMATION_SCHEMA['properties']),
+    'opening': record_schema({
+        'configuration': {'type': 'string', 'enum': ['single', 'paired', 'multiple', 'unknown']},
+        'panels': {'type': 'array', 'maxItems': 8, 'items': record_schema({
+            'component': {'type': 'string'},
+            'state': {'type': 'string', 'enum': ['open', 'partial', 'closed', 'unknown']},
+            'evidence': {'type': 'string'},
+            'observation_refs': ASSESSMENT_SCHEMA['properties']['observation_refs'],
+        })},
+    }),
+})
+
+
+def opening_stage(context):
+    return bool(re.match(r'^\s*(?:fully\s+)?open\b',
+                         (context.get('step') or {}).get('instruction', ''), re.IGNORECASE))
+
+
+OPENING_POLICY = '''For an opening stage, inventory ALL doors/panels of the named
+fixture. For a two-door fixture BOTH doors must be open, each with current dated
+evidence and usable manipulation/withdrawal clearance. One open door plus visible
+contents is insufficient even if an old success_criteria only mentions access.
+Report opening.configuration and one distinct opening.panels entry per component.
+Do not omit the still-closed or occluded partner, count the same panel twice, or
+infer release/clearance from camera motion. A partial panel is not open. If the
+configuration or any required panel cannot be established, do not confirm.
+A single-door fixture needs its one door open; a drawer needs that named drawer
+fully open with usable clearance. Do not invent a second door or open unrelated
+drawers, lower freezer compartments or neighboring fixtures. Use the actual
+observed configuration. Retain the original intended fixture and task constraints.'''
 CONFIRMATION_POLICY = '''Independently challenge a proposed stage completion across
 ALL RoboCasa tasks. Read the sensor images before accepting the proposed claim.
 Your job is to find missing proof, partial progress, or a mistaken physical state,
@@ -31,8 +63,11 @@ working area. A white sliver, visible shelves, a door edge, an angled panel, or 
 view through a gap does NOT alone establish access for manipulation or withdrawal.
 Check the opening, relevant panels, target working area and approach/withdrawal
 path for obstruction. Explicitly account for still-closed or partly-open panels
-that may block that path. Do not require a fixed panel count, all unrelated panels,
-or a made-up angle/width threshold. If the necessary path is occluded or its
+that may block that path. For paired-door fixtures, BOTH doors must be open;
+one open door is incomplete even if contents are visible. Account for every
+door of the named fixture, without inventing panels on single-door fixtures or
+drawers. Do not require unrelated fixtures or a made-up angle/width threshold.
+If the necessary path is occluded or its
 clearance cannot be established, report unknown rather than inferred clearance.
 For acquisition, distinguish contact/proximity from supported retention and
 separation from the source. Inspect wrist-relative retention over time; a similar
@@ -40,6 +75,9 @@ object left at the source may be a different instance. Do not require later
 transport or every camera to expose the grasp. Occlusion alone is not failure.
 For placement, check intended support/containment and release rather than mere
 overlap. For navigation, check arrival rather than destination visibility alone.
+For a complete pick-and-place instruction, require both final destination
+support/containment and release, checked separately. An object still held or
+moving toward its destination is partial progress, not a completed transfer.
 For all other actions, require the intended physical effect, not approach/motion.
 Use the relevant camera views, not majority voting. Historical frames establish
 change, but each confirmed condition needs current evidence. Respect the stage
@@ -63,15 +101,23 @@ A similar object remaining at the source may be a different instance; do not use
 it alone to refute acquisition. Conversely proximity, a detection box, or fingers
 closing alone do not establish a grasp. Do not demand that acquisition also
 complete transport to the final destination. Respect explicit stage requirements.
+For a complete pick-and-place instruction, acquisition and arrival alone are
+partial progress; require final placement on/in the destination and release.
 For other actions compare the relevant changed state: access clearance, support
 or containment after placement, destination arrival, or the intended physical
 effect of operating an appliance, pouring, washing or manipulating an object.
-Do not impose a fixed panel count, geometry threshold, or task-specific rule.
+Use the observed panel configuration, without invented geometry thresholds or
+task-name rules. Paired fixtures require both doors; single fixtures require one.
 For access, an interior glimpse, white sliver, angled panel or door edge is only
 partial progress. Establish the actual opening and unobstructed usable path into
 the intended working area, including manipulation and withdrawal clearance. A
 partly-open panel may still obstruct that path. If the relevant path is hidden
 or clearance is only inferred from seeing contents, do not report satisfied.
+For a paired-door fixture BOTH doors must be open, not just the easier door.
+Check every door on the named fixture separately. An occluded partner is unknown,
+not implicitly open. Single-door fixtures need only their one door; drawers need
+the named drawer fully open. Never invent a second panel or require unrelated
+fixtures, neighboring drawers or lower freezer compartments.
 Use satisfied when the stage effect is supported NOW, unsatisfied when visible
 evidence refutes it, and unknown when evidence is insufficient or contradictory.
 Satisfaction requires at least one current observation reference. References must
@@ -128,7 +174,8 @@ def boundary_completion(assessment):
 
 
 def validate_confirmation(result, context):
-    if not isinstance(result, dict) or set(result) != set(CONFIRMATION_SCHEMA['properties']):
+    schema = OPENING_CONFIRMATION_SCHEMA if opening_stage(context) else CONFIRMATION_SCHEMA
+    if not isinstance(result, dict) or set(result) != set(schema['properties']):
         raise ValueError('Invalid stage confirmation fields')
     if result['verdict'] not in ('confirmed', 'incomplete', 'uncertain'):
         raise ValueError('Invalid stage confirmation verdict')
@@ -146,6 +193,31 @@ def validate_confirmation(result, context):
             'evidence': check['evidence'], 'observation_refs': check['observation_refs']}}, context)
     if result['verdict'] == 'confirmed' and any(check['status'] != 'observed' for check in checks):
         raise ValueError('Cannot confirm with an unknown or contradicted physical condition')
+    if opening_stage(context):
+        opening = result['opening']
+        if not isinstance(opening, dict) or set(opening) != {'configuration', 'panels'}:
+            raise ValueError('Opening confirmation needs a configuration and per-panel evidence')
+        configuration, panels = opening['configuration'], opening['panels']
+        if configuration not in ('single', 'paired', 'multiple', 'unknown') or not isinstance(panels, list) or len(panels) > 8:
+            raise ValueError('Invalid opening configuration')
+        names = set()
+        for panel in panels:
+            if (not isinstance(panel, dict) or set(panel) != {'component', 'state', 'evidence', 'observation_refs'}
+                    or not isinstance(panel['component'], str) or not panel['component'].strip()
+                    or panel['component'].strip().casefold() in names
+                    or panel['state'] not in ('open', 'partial', 'closed', 'unknown')):
+                raise ValueError('Opening confirmation needs distinct valid panel records')
+            names.add(panel['component'].strip().casefold())
+            validate_boundary_review({'assessment': {'outcome': 'unknown', 'transport': None,
+                'evidence': panel['evidence'], 'observation_refs': panel['observation_refs']}}, context)
+        if result['verdict'] == 'confirmed':
+            if (configuration == 'unknown' or not panels
+                    or (re.search(r'\bdoors\b', context['step']['instruction'], re.IGNORECASE) and len(panels) < 2)
+                    or (configuration == 'single' and len(panels) != 1)
+                    or (configuration == 'paired' and len(panels) != 2)
+                    or (configuration == 'multiple' and len(panels) < 3)
+                    or any(panel['state'] != 'open' for panel in panels)):
+                raise ValueError('Opening requires every panel open; paired fixtures require BOTH doors')
     return deepcopy(result)
 
 

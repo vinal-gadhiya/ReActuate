@@ -6,7 +6,7 @@ from core.goals import normalized
 
 
 SWITCH_REASONS = {'blocked_access', 'wrong_target', 'object_loss', 'unsafe_state',
-                  'goal_contradiction', 'useful_required_object_held'}
+                  'goal_contradiction', 'useful_required_object_held', 'execution_failure'}
 
 
 def completed_stage_decision(decision, current_step, ledger=None):

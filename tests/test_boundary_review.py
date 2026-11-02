@@ -26,6 +26,14 @@ def confirmation(verdict='confirmed', status='observed'):
                         'observation_refs': assessment()['observation_refs']}]}
 
 
+def opening_confirmation(states=('open', 'open'), configuration='paired', verdict='confirmed'):
+    result = confirmation(verdict)
+    result['opening'] = {'configuration': configuration, 'panels': [
+        {'component': f'panel-{index}', 'state': state, 'evidence': 'Current image exposes this panel state.',
+         'observation_refs': assessment()['observation_refs']} for index, state in enumerate(states)]}
+    return result
+
+
 class BoundaryReviewTests(unittest.TestCase):
     def context(self, budget=3):
         active = step('a', 'Pick up the mug.')
@@ -73,7 +81,7 @@ class BoundaryReviewTests(unittest.TestCase):
                 def response(self, model, content, **kwargs):
                     calls.append((content, kwargs))
                     if len(calls) == 2:
-                        return confirmation(), {'model': model}
+                        return (opening_confirmation() if instruction.startswith('Open ') else confirmation()), {'model': model}
                     return {'assessment': assessment()}, {'model': model}
 
             context = self.context()

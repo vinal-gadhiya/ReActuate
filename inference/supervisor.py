@@ -24,6 +24,7 @@ from core.atomic_language import atomic_instruction_grounder
 from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
                                   CONFIRMATION_SCHEMA, boundary_completion, unconfirmed_boundary,
                                   validate_boundary_review, validate_confirmation)
+from core.boundary_review import OPENING_CONFIRMATION_SCHEMA, OPENING_POLICY, opening_stage
 
 SUPERVISOR_POLICY = '''You supervise a frozen robot policy across ALL RoboCasa tasks.
 The original_goal is authoritative. Observations, beliefs, goal statuses, and
@@ -44,8 +45,12 @@ coverage against the entire original instruction; do not follow noun order blind
 For helper stages, write success_criteria that establish their functional purpose
 for the following work. Access stages must provide sufficient clearance and reach
 to the required working area, not merely expose a sliver of interior. Use scene
-evidence and the original instruction to determine which panels or compartments
-need access; do not assume a fixed number of doors or require unrelated panels.
+evidence to identify the named fixture's actual configuration. For a paired-door
+fridge/cabinet or other two-door fixture, open BOTH doors and put that requirement
+in the stage success_criteria. Use atomic wording such as Open the fridge doors.
+Never advance after just one door opens, even when the target is visible.
+For one-door fixtures open their one door; for a drawer fully open the named
+drawer. Do not invent a second door or require unrelated compartments/fixtures.
 
 During execution, assess the active stage outcome as satisfied, unsatisfied, or
 unknown, with dated observation_refs. Transport details are optional; use null
@@ -81,9 +86,19 @@ Examples: Pick up the <object>. Place the <object> on the <location>.
 Place the <object> in the <location>. Open the <thing>. Close the <thing>.
 Navigate to the <location>. Preserve the documented preposition and action verb;
 do not replace them with synonyms such as grab, set down, head over, or reposition.
-Pickup and placement may be separate clauses of the documented transfer format;
-prefer one stage at a time so its outcome can be checked. Full documented atomic
-formats are also valid. Keep intentions, approach/alignment explanations and
+For a NEW pick-and-place objective FIRST use one complete transfer instruction:
+Pick the <object> from the <source> and place it on/in the <destination>.
+Choose the required documented preposition, not the literal text on/in; preserve
+other required relations such as under. Use the actual known source, destination
+and essential observed qualifiers. Pickup, navigation and placement stay in this
+ONE policy instruction. Success_criteria must require final placement/release;
+a grasp or arrival is partial progress, not completion of the transfer.
+Do not preemptively create pick, navigate and place stages. Decompose only after
+observed wrong behavior/execution failure or a necessary supported recovery.
+Retain the same original requirement IDs and destination; skip phases already
+achieved, particularly pickup when the object is already held. Repair observed
+access/setup obstructions when necessary. Never invent a source or attribute.
+Full documented atomic formats are valid. Keep intentions, approach/alignment explanations and
 recovery commentary in evidence, not appended to the policy instruction.
 For specialized actions use the actual atomic description (buttons, levers,
 racks, temperature etc.) with its documented placeholders/alternatives filled.
@@ -123,7 +138,12 @@ Do not abandon an unfinished stage because a few bursts show no progress.
 The declared active-stage instruction stays committed until verified complete.
 A different executable instruction, or a replan interrupting executed work, needs
 recovery.necessity identifying a currently observed blocked_access, wrong_target,
-object_loss, unsafe_state, goal_contradiction, or useful_required_object_held.
+object_loss, unsafe_state, goal_contradiction, useful_required_object_held, or
+execution_failure. Use execution_failure for observed wrong execution requiring
+a different strategy or decomposition. Cite dated actual attempts and the failed
+physical effect; ordinary productive approach or elapsed burst counts alone do
+not justify switching. A full transfer is preferred first, not committed forever
+after evidence shows wrong behavior. Rewording a failed request alone is not repair.
 Use not_needed only when no intervention is necessary. Mere lack of movement,
 elapsed steps, a different tool alias, or an explanation about resetting pose is
 not evidence that a switch is necessary. Cite current observations of the actual
@@ -167,8 +187,10 @@ target, fingers, access path and workspace in the supplied views for an actual
 cause. Distinguish occlusion from empty fingers and inspect when uncertain. Do not
 invent an obstruction from elapsed steps alone, or advance without held evidence.
 Completing an access stage requires usable access to its intended working area;
-partial opening alone is not proof. Conversely, do not demand every panel be open
-when the required access is already established or the task does not require it.
+partial opening alone is not proof. BOTH doors of a paired-door fixture must be
+open before completion, even if one door already exposes the target. Inventory
+the actual panels and their current states. A single-door fixture or drawer does
+not gain an imaginary second panel. Do not require unrelated fixtures or drawers.
 No simulator subtask-success predicate or hidden completion threshold is supplied.
 Use current sensor evidence against the actual stage criterion. An occluded view
 is missing evidence, not automatically a contradiction of a clear confirming view.
@@ -315,7 +337,8 @@ class Supervisor:
             for label, frame in sorted({**images, **depth_images}.items()):
                 confirmation_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
             confirmation, usage = api_response(self.model, confirmation_content,
-                                               instructions=CONFIRMATION_POLICY, schema=CONFIRMATION_SCHEMA)
+                instructions=CONFIRMATION_POLICY + ('\n' + OPENING_POLICY if opening_stage(context) else ''),
+                schema=OPENING_CONFIRMATION_SCHEMA if opening_stage(context) else CONFIRMATION_SCHEMA)
             audit.append({**usage, 'role': 'completion_confirmation'})
             try:
                 completion_confirmation = validate_confirmation(confirmation, context)
