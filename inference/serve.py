@@ -117,8 +117,12 @@ def make_handler(engine):
                     key for name, modality in engine.metadata['modalities'].items()
                     if name != 'action' for key in modality['modality_keys']
                 }
+                expected.update(engine.metadata.get('request_context_keys', []))
                 if set(observations) != expected:
                     raise ValueError(f'Observation keys differ: {set(observations) ^ expected}')
+                if engine.metadata.get('request_context_keys') and request_id != (
+                        f'{observations["__episode_id"].item()}:{observations["__control_step"].item()}'):
+                    raise ValueError('Request ID does not match policy episode and control step')
                 with lock:
                     actions = engine.predict(observations)
                 actions = {key: np.asarray(value) for key, value in actions.items()}

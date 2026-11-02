@@ -19,6 +19,11 @@ or clip tracking, and request bounded fixture navigation before resuming a pendi
 transfer. Motion diagnostics compare declared robot measurements and rendered
 images; they do not query private object poses or certify task progress.
 
+Awomo-0.5I is selectable with `compose.awomo.yaml` and
+`--expected-policy awomo-0.5i`. Its episode-scoped 5 Hz camera history and
+16-step predictions are carried through the same harness, including Muse
+instruction changes and optional SAM. See [Awomo setup and Thor checks](../inference/AWOMO.md).
+
 `--planning-context summary` (default) also supplies a bounded episode notebook
 with the initial/current plan, accepted revisions and completion claims, executed
 attempts, object location changes, and recovery feedback. It survives the recent

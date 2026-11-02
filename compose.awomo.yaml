@@ -1,0 +1,20 @@
+# Use with compose.yaml. Select only one policy overlay at a time.
+services:
+  sim:
+    environment:
+      EXPECTED_POLICY: awomo-0.5i
+      POLICY_TIMEOUT: '600'
+  inference:
+    image: objectworld-awomo-05i:latest
+    build:
+      context: .
+      dockerfile: inference/Dockerfile.awomo
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - awomo-checkpoints:/awomo
+      - checkpoints:/checkpoints:ro
+      - huggingface-cache:/cache/huggingface
+volumes:
+  awomo-checkpoints:
+    name: objectworld-awomo-05i-checkpoints

@@ -12,6 +12,7 @@ import numpy as np
 
 from core.policy_http import PolicyClient
 from core.policy_config import resolve_policy_execution
+from core.awomo import AwomoHistory
 
 
 def make_policy_observation(observation, metadata, instruction=None):
@@ -50,7 +51,7 @@ def validate_actions(actions, action_space, horizon):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--policy-url', default='http://inference:8000')
-    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'))
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam', 'awomo-0.5i'), default=os.environ.get('EXPECTED_POLICY'))
     parser.add_argument('--task', default='OpenCabinet')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--episodes', type=int, default=1)
@@ -58,7 +59,7 @@ def main():
     parser.add_argument('--action-steps', type=int,
                         help='Actions per prediction; default: backend recommendation, otherwise 16')
     parser.add_argument('--max-steps', type=int, help='Default: RoboCasa task horizon')
-    parser.add_argument('--timeout', type=float, default=120)
+    parser.add_argument('--timeout', type=float, default=float(os.environ.get('POLICY_TIMEOUT', '120')))
     parser.add_argument('--output', type=Path, default=Path('/outputs/gr00t-open-cabinet'))
     args = parser.parse_args()
     if args.episodes <= 0 or args.timeout <= 0:
@@ -111,13 +112,19 @@ def main():
                     camera_heights=metadata['camera_height'],
                 )
                 observation, _ = env.reset(seed=episode_seed)
+                episode_id = f'{run_id}-{episode}'
+                history = AwomoHistory(episode_id, episode_seed) if metadata.get('policy') == 'awomo-0.5i' else None
+                if history is not None:
+                    history.observe(0, observation)
                 camera_key = metadata['modalities']['video']['modality_keys'][0]
                 fps = int(env.unwrapped.env.control_freq)
                 with imageio.get_writer(video_path, fps=fps) as video:
                     video.append_data(observation[camera_key])
                     while steps < max_steps and not success:
-                        request_id = f'{run_id}:{episode}:{steps}'
+                        request_id = f'{episode_id}:{steps}'
                         inputs = make_policy_observation(observation, metadata)
+                        if history is not None:
+                            inputs.update(history.payload(steps))
                         inputs['__request_id'] = np.asarray(request_id)
                         before = time.monotonic()
                         actions = client.predict(inputs)
@@ -125,10 +132,14 @@ def main():
                         if actions.pop('__request_id').item() != request_id:
                             raise ValueError('Stale/mismatched policy response')
                         validate_actions(actions, env.action_space, metadata['action_horizon'])
+                        if history is not None:
+                            history.predicted(steps)
                         for index in range(min(args.action_steps, max_steps - steps)):
                             action = {key: value[index].copy() for key, value in actions.items()}
                             observation, _, terminated, truncated, info = env.step(action)
                             steps += 1
+                            if history is not None:
+                                history.observe(steps, observation)
                             video.append_data(observation[camera_key])
                             success = bool(info.get('success', False))
                             if success or terminated or truncated:

@@ -14,4 +14,16 @@ def resolve_policy_execution(metadata, action_steps=None, expected_policy=None, 
              if action_steps is None else action_steps)
     if type(steps) is not int or not 1 <= steps <= horizon:
         raise ValueError('Action steps must be a positive integer within the policy horizon')
+    if metadata.get('required_action_steps') is not None and steps != metadata['required_action_steps']:
+        raise ValueError(f'{backend} requires exactly {metadata["required_action_steps"]} action steps per prediction')
     return steps
+
+
+def policy_family(metadata):
+    return {'gr00t_n1.5': 'gr00t'}.get(metadata.get('policy'), metadata.get('policy'))
+
+
+def validate_policy_interval(metadata, step, steps, max_steps):
+    quantum = metadata.get('required_action_steps')
+    if quantum is not None and (step % quantum or (steps % quantum and step + steps < max_steps)):
+        raise ValueError(f'{metadata["policy"]} requires {quantum}-step aligned requests, except the final episode remainder')

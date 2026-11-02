@@ -21,6 +21,7 @@ from core.observations import rgb_diagnostics
 from core.working_context import working_context, task_references
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
+from core.policy_config import validate_policy_interval
 from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
                                   CONFIRMATION_SCHEMA, boundary_completion, unconfirmed_boundary,
                                   validate_boundary_review, validate_confirmation)
@@ -72,6 +73,8 @@ exactly ONE known tool with bounded steps. Provide action intent, object,
 destination, and instruction. Intent is task-general text; use navigate for travel.
 The instruction must match the executable command and reaches the backend
 verbatim. Prefer concise wording, but include appearance or relations if needed.
+When policy_step_quantum is supplied, executable step counts must be multiples
+of that interval, except the final episode remainder. Preserve temporal sampling.
 Examples: Pick up the mug. Navigate to the dining counter. Place the mug on the tray.
 Use run_groot(instruction="...", steps=32); run_groot names the selected backend,
 not necessarily GR00T. navigate(fixture="...", steps=32) is a compatibility alias.
@@ -454,6 +457,12 @@ class Supervisor:
             try:
                 validate_decision(result, context['decision_step_limit'], context['capabilities']['set_gripper'],
                                   context['capabilities'].get('move_vertical', False))
+                if result['status'] == 'continue' and context.get('policy_step_quantum'):
+                    for _, arguments in parse_program(result['program'], context['decision_step_limit']):
+                        validate_policy_interval({'policy': context['control_owner'],
+                            'required_action_steps': context['policy_step_quantum']},
+                            context['observation_step'], arguments['steps'],
+                            context['observation_step'] + context['episode_steps_left'])
                 if context.get('working_context_version') == 2:
                     if result['status'] == 'replan':
                         self.instruction_grounder.validate_generated_plan(

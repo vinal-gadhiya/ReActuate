@@ -221,8 +221,8 @@ def main():
     parser.add_argument('--seeds', nargs='+', type=int, default=[0])
     parser.add_argument('--action-steps', type=int,
                         help='Actions per prediction; default uses backend recommendation in every condition')
-    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'))
-    parser.add_argument('--decision-steps', type=int, default=40)
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam', 'awomo-0.5i'), default=os.environ.get('EXPECTED_POLICY'))
+    parser.add_argument('--decision-steps', type=int, help='Default 40, or 32 when expected policy is Awomo')
     parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
                         help='Persistent episode summary or recent events only; object memory is retained in both')
     parser.add_argument('--max-decisions', type=int, default=0, help='0 means unlimited')
@@ -249,6 +249,8 @@ def main():
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if args.decision_steps is None:
+        args.decision_steps = 32 if args.expected_policy == 'awomo-0.5i' else 40
     tasks = args.tasks or [args.task]
     if len(tasks) != len(set(tasks)) or any(re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', task) is None for task in tasks):
         parser.error('Tasks must be unique registered-style task names')

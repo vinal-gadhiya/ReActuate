@@ -15,7 +15,8 @@ from core.agent import (parse_program, validate_decision, validate_plan, validat
                         validate_placement_destination, navigation_fixture)
 from core.scene_planning import inventory_updates, load_plan, PlanValidationError, request_grounded_plan
 from core.policy_http import PolicyClient, SupervisorClient, RetryableSupervisorError, PolicyHTTPError
-from core.policy_config import resolve_policy_execution
+from core.policy_config import resolve_policy_execution, policy_family, validate_policy_interval
+from core.awomo import AwomoHistory
 from core.simulator_context import build_simulator_context, load_operator_context
 from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
@@ -47,12 +48,16 @@ def gripper_supported(env):
 
 class EpisodeTools:
     def __init__(self, env, observation, policy, metadata, video, max_steps, chunk_steps, allow_gripper=False,
-                 artifact_directory=None, hybrid_control=False):
+                 artifact_directory=None, hybrid_control=False, policy_seed=0):
         self.env, self.observation, self.policy, self.metadata, self.video = env, observation, policy, metadata, video
         self.max_steps, self.chunk_steps = max_steps, chunk_steps
         self.steps, self.success, self.ended = 0, False, False
         self.inference_seconds = 0.0
         self.run_id = uuid.uuid4().hex
+        self.policy_history = (AwomoHistory(self.run_id, policy_seed)
+                               if metadata.get('policy') == 'awomo-0.5i' else None)
+        if self.policy_history is not None:
+            self.policy_history.observe(0, observation)
         self.allow_gripper = (allow_gripper or hybrid_control) and gripper_supported(env)
         if hybrid_control and not self.allow_gripper:
             raise ValueError('Hybrid control requires the validated fixed-impedance delta OSC controller')
@@ -94,6 +99,8 @@ class EpisodeTools:
                     counts['placement_translation_limited'] = counts.get('placement_translation_limited', 0) + 1
         self.observation, _, terminated, truncated, info = self.env.step(action)
         self.steps += 1
+        if self.policy_history is not None:
+            self.policy_history.observe(self.steps, self.observation)
         self.success = bool(info.get('success', False))
         self.ended = bool(terminated or truncated)
         self.video.append_data(self.observation[self.camera])
@@ -103,6 +110,7 @@ class EpisodeTools:
         return action
 
     def run_groot(self, instruction, steps):
+        validate_policy_interval(self.metadata, self.steps, steps, self.max_steps)
         before = {key: np.asarray(self.observation[key]).copy() for key in
                   self.metadata['modalities']['state']['modality_keys']}
         image_before = self.observation[self.camera].copy()
@@ -112,6 +120,8 @@ class EpisodeTools:
             check_rgb({key: self.observation[key] for key in self.metadata['modalities']['video']['modality_keys']},
                       self.artifact_directory, self.steps)
             inputs = make_policy_observation(self.observation, self.metadata, instruction=instruction)
+            if self.policy_history is not None:
+                inputs.update(self.policy_history.payload(self.steps))
             request_id = f'{self.run_id}:{self.steps}'
             inputs['__request_id'] = np.asarray(request_id)
             started = time.monotonic()
@@ -120,6 +130,8 @@ class EpisodeTools:
             if actions.pop('__request_id').item() != request_id:
                 raise ValueError('Mismatched policy response')
             validate_actions(actions, self.env.action_space, self.metadata['action_horizon'])
+            if self.policy_history is not None:
+                self.policy_history.predicted(self.steps)
             for index in range(min(self.chunk_steps, limit - self.steps)):
                 action = {key: value[index].copy() for key, value in actions.items()}
                 applied.append(self.step(action))
@@ -146,6 +158,8 @@ class EpisodeTools:
         wrapper = self.env.unwrapped
         raw = wrapper.env._get_observations(force_update=True)
         self.observation = wrapper.get_observation(raw)
+        if self.policy_history is not None:
+            self.policy_history.refresh(self.steps, self.observation)
 
     def perception_clip(self):
         frames = list(self.frames)
@@ -555,6 +569,9 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                                  getattr(tools, 'allow_vertical', False))
         recovery_authorization = None
         try:
+            for _, arguments in commands:
+                validate_policy_interval(getattr(tools, 'metadata', {}), tools.steps,
+                                         arguments['steps'], tools.max_steps)
             if window_exhausted:
                 raise ValueError('Action window complete: replan for pending requirements before executing more work')
             if mode == 'agent' and instruction_grounder is not None:
@@ -681,7 +698,9 @@ def main():
     parser.add_argument('--plan', type=Path, help='JSON plan for fixed mode or a controlled agent starting plan')
     parser.add_argument('--context-file', type=Path, help='Optional public task/scene notes JSON')
     parser.add_argument('--policy-url', default='http://inference:8000')
-    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam'), default=os.environ.get('EXPECTED_POLICY'),
+    parser.add_argument('--policy-timeout', type=float, default=float(os.environ.get('POLICY_TIMEOUT', '120')),
+                        help='Timeout per policy prediction, independent of episode step budget')
+    parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam', 'awomo-0.5i'), default=os.environ.get('EXPECTED_POLICY'),
                         help='Fail before motion if inference metadata identifies a different backend')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
@@ -692,7 +711,7 @@ def main():
                         help='episode: keep the committed stage until success/end or step budget; bounded: honor early stop/retry limits')
     parser.add_argument('--action-steps', type=int,
                         help='Actions executed per prediction; default: backend recommendation, otherwise 8')
-    parser.add_argument('--decision-steps', type=int, default=40)
+    parser.add_argument('--decision-steps', type=int, help='Observation interval; default 40, or 32 for Awomo')
     parser.add_argument('--max-decisions', type=int, default=0, help='Total decision cap; 0 means unlimited (default)')
     parser.add_argument('--max-api-calls', type=int, default=0, help='Total API call cap; 0 means unlimited (default)')
     parser.add_argument('--max-replans', type=int, default=-1, help='Recovery replan cap; -1 means unlimited (default)')
@@ -725,6 +744,8 @@ def main():
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    decision_steps_given = args.decision_steps is not None
+    args.decision_steps = args.decision_steps if decision_steps_given else 40
     for key in ('episodes', 'decision_steps'):
         if getattr(args, key) <= 0:
             parser.error(f'{key} must be positive')
@@ -732,6 +753,8 @@ def main():
         parser.error('Decision steps <= 80, nonnegative decision/API caps, and replans >= -1 are required')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
+    if args.policy_timeout <= 0:
+        parser.error('--policy-timeout must be positive')
     if args.max_supervisor_failures < 0:
         parser.error('--max-supervisor-failures must be nonnegative')
     if args.max_stop_continuations < 0:
@@ -775,11 +798,16 @@ def main():
                                         or args.task in TASK_SET_REGISTRY['pretrain300']):
         parser.error('Task must be in composite_unseen and excluded from pretrain300')
     max_steps = args.max_steps or get_task_horizon(args.task)
-    policy = PolicyClient(args.policy_url)
+    policy = PolicyClient(args.policy_url, timeout=args.policy_timeout)
     metadata = policy.metadata()
     if metadata.get('data_config') != 'panda_omron' or metadata.get('embodiment') != 'PandaOmron':
         raise ValueError('A PandaOmron policy is required')
     args.action_steps = resolve_policy_execution(metadata, args.action_steps, args.expected_policy)
+    if metadata.get('required_action_steps'):
+        if not decision_steps_given:
+            args.decision_steps = 32
+        if args.decision_steps % metadata['required_action_steps']:
+            parser.error('Decision steps must align with the backend required action interval')
     print(json.dumps({'event': 'policy_selected', 'policy_url': args.policy_url,
                       'policy_backend': metadata.get('policy', 'unknown'),
                       'expected_policy': args.expected_policy, 'action_steps': args.action_steps,
@@ -965,7 +993,8 @@ def main():
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'instruction_style': 'single_stage',
                     'max_stop_continuations': args.max_stop_continuations,
-                    'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
+                    'control_owner': policy_family(metadata),
+                    'policy_step_quantum': metadata.get('required_action_steps'),
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
                                      'navigate': (args.max_navigation_bursts is None or
@@ -1022,7 +1051,7 @@ def main():
             with imageio.get_writer(directory / 'rollout.mp4', fps=int(env.unwrapped.env.control_freq)) as video:
                 video.append_data(observation[camera_keys[0]])
                 tools = EpisodeTools(env, observation, policy, metadata, video, max_steps, args.action_steps,
-                                     False, directory, False)
+                                     False, directory, False, policy_seed=args.seed + episode)
                 simulator_context = build_simulator_context(
                     args.task, args.task in COMPOSITE_TASK_DATASETS, metadata,
                     ATOMIC_TASK_DATASETS.keys(), tools.allow_gripper, operator_context,
@@ -1099,7 +1128,7 @@ def main():
                     concise_instructions=True,
                     max_stop_continuations=args.max_stop_continuations,
                     goal_ledger=ledger, attempt_history=attempts,
-                    instruction_adapter=PolicyInstructionAdapter('patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t'),
+                    instruction_adapter=PolicyInstructionAdapter(policy_family(metadata)),
                     instruction_grounder=atomic_instruction_grounder() if args.mode == 'agent' else None,
                     execution_policy=args.execution_policy,
                 )
@@ -1114,7 +1143,7 @@ def main():
                     'scene_identity': scene['identity'],
                     'hybrid_control': False,
                     'supervisor_depth': args.depth,
-                    'control_owner': 'patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t',
+                    'control_owner': policy_family(metadata),
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,
                     'planning_context': args.planning_context,

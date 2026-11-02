@@ -11,9 +11,11 @@
 !inference/Dockerfile
 !inference/Dockerfile.supervisor
 !inference/Dockerfile.patchwam
+!inference/Dockerfile.awomo
 !inference/*.py
 !inference/requirements.txt
 !inference/requirements.patchwam.txt
+!inference/requirements.awomo.txt
 !core/
 !core/*.py
 !core/*.json

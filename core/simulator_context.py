@@ -125,6 +125,10 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
         guide = deepcopy(SIMULATOR_GUIDE)
         guide['robot']['executor'] = 'Frozen PatchWAM predicts arm, gripper, and base actions from current images, proprioception, and language.'
         guide['execution_rules'] = [rule.replace('GR00T', 'PatchWAM') for rule in guide['execution_rules']]
+    elif metadata.get('policy') == 'awomo-0.5i':
+        guide = deepcopy(SIMULATOR_GUIDE)
+        guide['robot']['executor'] = 'Frozen Awomo-0.5I predicts arm, gripper and base actions from current RGB, dated camera history, proprioception and the latest instruction.'
+        guide['execution_rules'] = [rule.replace('GR00T', 'Awomo-0.5I') for rule in guide['execution_rules']]
     return {
         'version': CONTEXT_VERSION, 'guide': guide,
         'task': {'name': task, 'kind': 'composite' if is_composite else 'atomic',
@@ -132,8 +136,8 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
                  'instruction_source': 'original_goal is the episode description, not a generic task summary'},
         'policy_reference': {
             'registered_atomic_task_names': atomic_tasks,
-            'meaning': ('Task-category vocabulary only, not tools, scene entities, or verified PatchWAM competencies.'
-                        if metadata.get('policy') == 'patchwam' else
+            'meaning': ('Task-category vocabulary only, not tools, scene entities, or verified frozen-executor competencies.'
+                        if metadata.get('policy') in ('patchwam', 'awomo-0.5i') else
                         'Task-category vocabulary only, not tools, scene entities, or verified GR00T competencies.'),
             'instruction_catalog': {
                 'upstream_ref': catalog['upstream_ref'],
@@ -142,7 +146,8 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
                 'tasks': [{key: entry[key] for key in ('name', 'category', 'description')}
                           for entry in catalog['tasks']],
                 'usage': 'Use this vocabulary to form concise single-action instructions for the actual goal. '
-                         'Separate pickup and placement; keep detailed grounding in memory and success criteria. Templates are not executable tools '
+                         'Try full source-to-destination transfers first; decompose for supported recovery. '
+                         'Keep detailed grounding in memory and success criteria. Templates are not executable tools '
                          'or evidence of checkpoint competence. Exact demonstration annotations may differ.',
             },
         },

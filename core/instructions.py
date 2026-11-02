@@ -7,7 +7,7 @@ class PolicyInstructionAdapter:
     VERSION = 'semantic-action-v1'
 
     def __init__(self, backend):
-        if backend not in ('gr00t', 'patchwam'):
+        if backend not in ('gr00t', 'patchwam', 'awomo-0.5i'):
             raise ValueError(f'Unsupported policy instruction backend: {backend}')
         self.backend = backend
         # Independent profiles can be evaluated without changing either policy.
@@ -17,6 +17,8 @@ class PolicyInstructionAdapter:
                       'place': 'Place the {object} on the {destination}.'},
             'patchwam': {'navigate': 'Navigate to the {destination}.', 'pickup': 'Pick up the {object}.',
                         'place': 'Place the {object} on the {destination}.'},
+            'awomo-0.5i': {'navigate': 'Navigate to the {destination}.', 'pickup': 'Pick up the {object}.',
+                          'place': 'Place the {object} on the {destination}.'},
         }[backend]
 
     def render(self, action):
