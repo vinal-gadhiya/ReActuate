@@ -71,6 +71,24 @@ class EpisodeExecutionTests(unittest.TestCase):
         self.assertEqual(tools.instructions, ['Pick up the bowl.'])
         self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
 
+    def test_partial_transfer_retains_the_full_instruction_until_placement(self):
+        instruction = 'Pick the bowl from the counter and place it on the tray.'
+        ledger, tools, events, plan = self.setup_episode(instruction, 64)
+        plan[0]['success_criteria'] = 'Bowl rests on the tray after release.'
+
+        def decide(*args):
+            result = proposal('continue', tools.steps, instruction)
+            result['program'] = f'run_groot(instruction={instruction!r}, steps=32)'
+            result['assessment']['transport'] = {
+                'phase': 'carry', 'held_object': 'bowl', 'grasp': 'supported',
+                'destination': 'tray', 'information_needed': 'placement and release',
+                'evidence': 'Bowl remains in fingers away from tray.'}
+            return result
+
+        self.run_episode(ledger, tools, events, plan, decide, max_decisions=0)
+        self.assertEqual(tools.instructions, [instruction, instruction])
+        self.assertFalse(any(event['event'] == 'subtask_transition' for event in events))
+
     def setup_episode(self, instruction, max_steps=2000):
         ledger = GoalLedger('Required outcomes', [definitions()[0]])
         tools, events = FakeTools(), []
@@ -423,6 +441,24 @@ class EvidenceContractTests(unittest.TestCase):
         result['recovery'].update(observation_refs=refs(32), necessity='useful_required_object_held')
         with self.assertRaises(ValueError):
             validate_stage_switch('Open the cabinet.', 'Navigate to the counter.', result, 32, ledger)
+
+    def test_full_transfer_decomposition_requires_current_recovery_evidence(self):
+        ledger = GoalLedger('Required outcome', [definitions()[0]])
+        ledger.observe(0, ['current:camera'])
+        ledger.observe(32, ['current:camera'])
+        committed = 'Pick the bowl from the counter and place it on the tray.'
+        decomposed = 'Navigate to the dining counter.'
+        result = proposal('continue', 32, decomposed)
+        with self.assertRaises(ValueError):
+            validate_stage_switch(committed, decomposed, result, 32, ledger)
+        result['recovery'] = {'change_type': 'strategy', 'necessity': 'execution_failure',
+            'description': 'Bowl remains held away from the tray after the transfer attempt; '
+                           'navigate with the retained bowl, then place it on the original tray.',
+            'observation_refs': refs(0)}
+        with self.assertRaises(ValueError):
+            validate_stage_switch(committed, decomposed, result, 32, ledger)
+        result['recovery']['observation_refs'] = refs(32)
+        validate_stage_switch(committed, decomposed, result, 32, ledger)
 
 
 if __name__ == '__main__':

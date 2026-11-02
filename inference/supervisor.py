@@ -70,7 +70,17 @@ exactly ONE known tool with bounded steps. Provide action intent, object,
 destination, and instruction. Intent is task-general text; use navigate for travel.
 The instruction must match the executable command and reaches the backend
 verbatim. Prefer concise wording, but include appearance or relations if needed.
-Examples: Pick up the mug. Navigate to the dining counter. Place the mug on the tray.
+For a new pick-and-place objective, FIRST try one complete transfer instruction:
+Pick the <object> from the <source> and place it on the <destination>.
+Use in for containment or another documented relation such as under when required.
+Use known sources and essential observed qualifiers; never invent entity attributes.
+Keep pickup, transport/navigation and placement within this ONE policy request,
+with success_criteria covering the final placement/release at the required
+destination. A grasp or arrival alone is partial progress, not stage completion.
+Do not preemptively create separate pick, navigate and place stages. Decompose
+only after observed execution failure or a necessary evidence-backed recovery.
+Preserve access/setup requirements when actually blocked or explicitly required.
+If the object is already held, preserve that progress instead of picking again.
 Use run_groot(instruction="...", steps=32); run_groot names the selected backend,
 not necessarily GR00T. navigate(fixture="...", steps=32) is a compatibility alias.
 FIELD CONTRACT: continue has exactly one executable call and replacement_steps=[].
@@ -84,9 +94,11 @@ Examples: Pick up the <object>. Place the <object> on the <location>.
 Place the <object> in the <location>. Open the <thing>. Close the <thing>.
 Navigate to the <location>. Preserve the documented preposition and action verb;
 do not replace them with synonyms such as grab, set down, head over, or reposition.
-Pickup and placement may be separate clauses of the documented transfer format;
-prefer one stage at a time so its outcome can be checked. Full documented atomic
-formats are also valid. Keep intentions, approach/alignment explanations and
+Complete documented source-to-destination transfer formats are the first choice
+for pick-and-place work. During justified recovery, separate pick, navigate and
+place stages are valid; omit phases already achieved and retain the original
+destination and requirement IDs. Full documented atomic formats are also valid.
+Keep intentions, approach/alignment explanations and
 recovery commentary in evidence, not appended to the policy instruction.
 For specialized actions use the actual atomic description (buttons, levers,
 racks, temperature etc.) with its documented placeholders/alternatives filled.
@@ -126,7 +138,10 @@ Do not abandon an unfinished stage because a few bursts show no progress.
 The declared active-stage instruction stays committed until verified complete.
 A different executable instruction, or a replan interrupting executed work, needs
 recovery.necessity identifying a currently observed blocked_access, wrong_target,
-object_loss, unsafe_state, goal_contradiction, or useful_required_object_held.
+object_loss, unsafe_state, goal_contradiction, useful_required_object_held, or
+execution_failure. Use execution_failure for a visually supported failed strategy
+that needs decomposition or another changed execution strategy; explain the
+concrete failed effect using dated executed-attempt evidence, not burst counts.
 Use not_needed only when no intervention is necessary. Mere lack of movement,
 elapsed steps, a different tool alias, or an explanation about resetting pose is
 not evidence that a switch is necessary. Cite current observations of the actual

@@ -15,6 +15,9 @@ Verify actual loss, identity change, wrong target, changed prerequisite or claim
 requirement state. For recovery also check that the proposed changed condition
 addresses the observed cause and preserves original constraints. Do not require
 the active stage to be complete merely to allow a justified prerequisite repair.
+For execution_failure, check dated executed-attempt evidence of the failed effect
+and the reason a changed strategy or decomposition is necessary. Burst counts,
+ordinary approach motion and productive partial progress alone are insufficient.
 Occlusion is missing evidence, not loss. Positive evidence from one useful view
 is not refuted by another occluded view. A similar item at the source may be a
 different instance. Compare identity and wrist-relative retention across time.

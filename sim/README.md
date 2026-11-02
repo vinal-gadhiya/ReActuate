@@ -46,8 +46,12 @@ base/orientation freeze, or Cartesian placement corrections are applied. Muse
 and SAM provide planning, visual memory, verification, and language corrections.
 Destination visibility does not automatically shorten a policy execution burst.
 Agent policy instructions use atomic-catalog vocabulary and formats, with exactly
-one tool call per decision and observation before the next stage. Pickup and
-placement can use separate clauses of the atomic transfer format; access/opening
+one tool call per decision and observation before the next stage. New pick-and-place
+work first uses a complete source-to-destination transfer instruction, including
+transport within the same policy request. Completion requires final placement,
+not just pickup or arrival. Observed failure or a necessary verified recovery can
+decompose the pending transfer into pick, navigate and place, retaining the original
+goal/destination and omitting phases already achieved. Access/opening
 is conditional on an observed obstruction or explicit requirement. Generated
 plans, replans and policy requests must match a documented atomic description or
 an explicitly derived `instruction_forms` template in the atomic catalog. Entity

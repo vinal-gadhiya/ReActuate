@@ -30,6 +30,9 @@ class AtomicLanguageTests(unittest.TestCase):
             ('Navigate to the dining counter.', 'navigate'),
             ('Turn on the sink faucet.', 'turn_on'),
             ('Pick up the mug and place it on the tray.', 'transfer_on'),
+            ('Pick the croissant from the white plate and place it on the tray.', 'transfer_from_on'),
+            ('Pick the mug from the counter and place it in the cabinet.', 'transfer_from_in'),
+            ('Pick the mug from the tray and place it under the coffee machine dispenser.', 'transfer_from_under'),
         ):
             with self.subTest(instruction=instruction):
                 match = self.grounder.validate(instruction)
@@ -60,9 +63,20 @@ class AtomicLanguageTests(unittest.TestCase):
             'Pick up the {object}.', 'Pick up the mug. Then close the cabinet.',
             'Place the mug on the tray and open the cabinet.',
             'Pick up the mug and lift the gripper.',
+            'Pick the mug from the counter and place it on the tray and close the cabinet.',
         ):
             with self.subTest(instruction=instruction), self.assertRaises(ValueError):
                 self.grounder.validate(instruction)
+
+    def test_full_transfer_reaches_executor_unchanged_as_one_request(self):
+        instruction = 'Pick the mug from the counter and place it on the tray.'
+        replies = iter([decision(program=f'run_groot(instruction={instruction!r}, steps=4)'),
+                        decision('stop', '')])
+        tools, events = FakeTools(), []
+        run_subtasks(tools, [step('transfer', instruction)], 'agent', lambda *args: next(replies),
+                     events.append, instruction_grounder=self.grounder)
+        self.assertEqual(tools.instructions, [instruction])
+        self.assertEqual(tools.steps, 4)
 
     def test_invalid_form_provenance_is_rejected(self):
         catalog = deepcopy(load_atomic_task_catalog())

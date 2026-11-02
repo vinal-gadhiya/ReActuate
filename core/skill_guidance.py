@@ -1,7 +1,16 @@
 """Small shared reasoning illustrations, not task-specific execution scripts."""
 
 
-RECOVERY_GUIDANCE = '''Use the active physical success criterion for EVERY skill.
+RECOVERY_GUIDANCE = '''For new pick-and-place work first issue a complete transfer:
+Pick the <object> from the <source> and place it on/in the <destination>.
+Choose one actual documented preposition; on/in here describes alternatives,
+not literal policy wording. Preserve other required documented relations too,
+such as under. Do not preemptively split pick, navigate and place.
+Final supported placement/release completes the transfer; pickup or arrival alone
+does not. Only decompose for observed failure or justified recovery, retaining
+the original destination and requirement IDs. Resume from the supported phase;
+do not reacquire an object already held or discard useful completed work.
+Use the active physical success criterion for EVERY skill.
 Distinguish productive approach from failure; two policy bursts alone are not
 two failed attempts. Diagnose an observed cause before changing strategy:
 wrong entity/component, blocked access, missing prerequisite, occupied workspace,

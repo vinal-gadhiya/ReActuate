@@ -34,7 +34,10 @@ path for obstruction. Explicitly account for still-closed or partly-open panels
 that may block that path. Do not require a fixed panel count, all unrelated panels,
 or a made-up angle/width threshold. If the necessary path is occluded or its
 clearance cannot be established, report unknown rather than inferred clearance.
-For acquisition, distinguish contact/proximity from supported retention and
+For a full pick-and-place stage, require final support/containment at the intended
+destination and release; pickup and arrival are partial progress. Only an
+acquisition-only stage can complete from a supported grasp alone.
+For acquisition-only stages, distinguish contact/proximity from supported retention and
 separation from the source. Inspect wrist-relative retention over time; a similar
 object left at the source may be a different instance. Do not require later
 transport or every camera to expose the grasp. Occlusion alone is not failure.
@@ -56,7 +59,9 @@ Compare each camera over time using snapshot mappings. Inspect the wrist camera
 for finger/object relations and the external cameras for scene motion. No camera
 is always authoritative: choose views that expose the relevant physical effect.
 Occlusion is missing evidence, not evidence of an empty gripper or failed action.
-For acquisition, look for enclosure/support by fingers, separation from the source
+For full pick-and-place stages, pickup and arrival alone are partial progress;
+require final placement/release at the intended destination. For acquisition-only
+stages, look for enclosure/support by fingers, separation from the source
 support, and retention relative to fingers as the background or robot moves. A
 target staying in the same wrist-image location can support a grasp, not stalling.
 A similar object remaining at the source may be a different instance; do not use
