@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 import re
+import json
+from core.selective_review import previous_transport
 
 
 def words(value):
@@ -49,11 +51,21 @@ def working_context(context):
                for item in entries]
     for item in beliefs:
         item['age_steps'] = max(0, context.get('observation_step', 0) - (item['observation_step'] or 0))
+    # Keep a bounded identity trail. A hidden wrist view must not erase a
+    # cross-camera retention claim, nor should an old claim become fresh truth.
+    identity_chars_left = 4000
+    for belief, source in zip(beliefs[:6], entries[:6]):
+        trail = {'identity_anchor': deepcopy(source.get('identity_anchor')),
+                 'observations': deepcopy(source.get('observations', [])[-2:])}
+        size = len(json.dumps(trail))
+        if size <= identity_chars_left:
+            belief.update(trail)
+            identity_chars_left -= size
     selected = {key: deepcopy(context[key]) for key in (
         'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used', 'last_stage_transition',
         'subtask_budget_mode', 'planning_window_exhausted', 'candidate_plan', 'diagnostic_replay',
         'observation_step', 'before_observation_step', 'observation_refs', 'depth_observations',
-        'temporal_observations', 'boundary_review_enabled',
+        'temporal_observations', 'boundary_review_enabled', 'verification_mode', 'verification_feedback',
         'attempt_history', 'recovery_feedback', 'plan_validation_feedback', 'allowed_current_cameras',
         'decision_step_limit', 'episode_steps_left', 'api_calls_left', 'replans_left',
         'navigation_bursts_left', 'navigation_budget_mode', 'execution_limits', 'capabilities',
@@ -62,9 +74,16 @@ def working_context(context):
     selected.update({
         'original_goal': context.get('original_goal') or (context.get('episode_context') or {}).get('original_goal', ''),
         'version': 2, 'beliefs': beliefs,
+        'previous_transport_claim': previous_transport(context),
         'simulator_context': {'task': deepcopy(task), 'robot': deepcopy(scene.get('guide', {}).get('robot', {})),
                               'tools': deepcopy(scene.get('tools', {})), 'cameras': deepcopy(scene.get('cameras', [])),
                               'operator_context': deepcopy(scene.get('operator_context', {})), 'policy_reference': {}},
         'belief_rule': 'Prefer current observations over stale claims. Conflicts remain uncertain; age is simulated control steps, not wall time.',
     })
+    feedback = context.get('execution_feedback') or {}
+    selected['recent_execution_feedback'] = {
+        'instruction_attempts': deepcopy(feedback.get('instruction_attempts', [])[-3:]),
+        'recent_outcome_reviews': deepcopy(feedback.get('recent_outcome_reviews', [])[-2:]),
+        'interpretation': feedback.get('interpretation', ''),
+    }
     return selected

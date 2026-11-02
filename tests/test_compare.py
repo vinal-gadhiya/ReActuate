@@ -89,6 +89,11 @@ class CompareTests(unittest.TestCase):
         self.assertIn('--no-sam', muse)
         self.assertIn('--sam', sam)
         self.assertEqual(sam[sam.index('--subtask-budget-mode') + 1], 'episode')
+        self.assertEqual(muse[muse.index('--verification-mode') + 1], 'selective')
+        args.verification_mode = 'always'
+        legacy = run_command(args, 'muse', 3, Path('/outputs/legacy'))
+        self.assertEqual(legacy[legacy.index('--verification-mode') + 1], 'always')
+        self.assertNotIn('--verification-mode', baseline)
         self.assertNotIn('--plan', baseline)
         self.assertNotIn('--reference-scene', baseline)
         self.assertIn('--reference-scene', muse)
@@ -175,3 +180,19 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(metrics['sam_calls'], 2)
             self.assertEqual(metrics['sam_calls_with_boxes'], 1)
             self.assertEqual(metrics['supervisor_wall_seconds'], 5)
+
+    def test_failed_supervisor_requests_contribute_to_wall_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'result.json').write_text(json.dumps({'success': False}))
+            events = [
+                {'event': 'supervisor_request_failed', 'wall_seconds': 7},
+                {'event': 'supervisor_response', 'wall_seconds': 3, 'audit': [
+                    {'role': 'planner'}, {'role': 'selective_verification'}]},
+            ]
+            (path / 'trace.jsonl').write_text('\n'.join(json.dumps(event) for event in events))
+            metrics = episode_metrics(path)
+            self.assertEqual(metrics['supervisor_wall_seconds'], 10)
+            self.assertEqual(metrics['supervisor_failed_requests'], 1)
+            self.assertEqual(metrics['planner_calls'], 1)
+            self.assertEqual(metrics['verification_calls'], 1)

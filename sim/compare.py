@@ -58,6 +58,7 @@ def run_command(args, condition, seed, output, plan=None):
         command += ['--plan', str(plan)]
     if condition != 'baseline':
         command += ['--boundary-review' if getattr(args, 'boundary_review', True) else '--no-boundary-review']
+        command += ['--verification-mode', getattr(args, 'verification_mode', 'selective')]
         command += ['--execution-policy', getattr(args, 'execution_policy', 'episode')]
         if getattr(args, 'depth', False):
             command += ['--depth', '--depth-max-metres', str(getattr(args, 'depth_max_metres', 3.0))]
@@ -81,7 +82,8 @@ def episode_metrics(directory):
     counts = {'decisions': 0, 'replans': 0, 'subtasks_marked_complete': 0,
               'accepted_handoffs': 0, 'blocked_handoffs': 0,
               'navigation_bursts': 0, 'inspection_decisions': 0, 'sam_tracking_calls': 0,
-              'sam_calls': 0, 'sam_calls_with_boxes': 0, 'supervisor_wall_seconds': 0.0}
+              'sam_calls': 0, 'sam_calls_with_boxes': 0, 'supervisor_wall_seconds': 0.0,
+              'planner_calls': 0, 'verification_calls': 0, 'supervisor_failed_requests': 0}
     for line in (directory / 'trace.jsonl').read_text().splitlines():
         event = json.loads(line)
         if event['event'] == 'decision':
@@ -91,10 +93,16 @@ def episode_metrics(directory):
             counts['inspection_decisions'] += int(event['status'] == 'inspect')
         elif event['event'] == 'supervisor_response':
             counts['supervisor_wall_seconds'] += event.get('wall_seconds', 0.0)
+            counts['planner_calls'] += sum(item.get('role') == 'planner' for item in event.get('audit', []))
+            counts['verification_calls'] += sum(item.get('role') in (
+                'boundary_review', 'completion_confirmation', 'selective_verification') for item in event.get('audit', []))
             if event.get('sam') is not None:
                 counts['sam_calls'] += 1
                 counts['sam_calls_with_boxes'] += int(bool(event['sam']['boxes']))
                 counts['sam_tracking_calls'] += int(event['sam'].get('mode') == 'track')
+        elif event['event'] == 'supervisor_request_failed':
+            counts['supervisor_wall_seconds'] += event.get('wall_seconds', 0.0)
+            counts['supervisor_failed_requests'] += 1
         elif event['event'] == 'tool' and ('navigation_source' in event or event['tool'] == 'navigate'):
             counts['navigation_bursts'] += 1
         elif event['event'] == 'subtask_transition':
@@ -237,6 +245,7 @@ def main():
     parser.add_argument('--subtask-budget-mode', choices=('plan', 'episode'), default='episode')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clips; default is image-only SAM')
     parser.add_argument('--boundary-review', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--verification-mode', choices=('selective', 'always'), default='selective')
     parser.add_argument('--depth', action='store_true', help='Give Muse aligned depth views in supervised conditions only')
     parser.add_argument('--depth-max-metres', type=float, default=3.0)
     parser.add_argument('--require-unseen-composite', action='store_true')
@@ -267,7 +276,7 @@ def main():
     if len(set(args.seeds)) != len(args.seeds):
         parser.error('Seeds must be unique')
     if not ((args.action_steps is None or args.action_steps > 0) and 1 <= args.decision_steps <= 80
-            and args.max_decisions > 0 and 1 <= args.max_api_calls <= 200 and args.max_replans >= 0):
+            and args.max_decisions >= 0 and args.max_api_calls >= 0 and args.max_replans >= -1):
         parser.error('Invalid execution budgets')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')

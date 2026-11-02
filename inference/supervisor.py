@@ -6,6 +6,7 @@ import json
 import os
 import re
 import traceback
+import time
 
 import numpy as np
 
@@ -21,6 +22,8 @@ from core.observations import rgb_diagnostics
 from core.working_context import working_context, task_references
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
+from core.selective_review import TRANSITION_POLICY, previous_transport, review_reasons
+from core.skill_guidance import RECOVERY_GUIDANCE, reasoning_example
 from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
                                   CONFIRMATION_SCHEMA, boundary_completion, unconfirmed_boundary,
                                   validate_boundary_review, validate_confirmation)
@@ -284,13 +287,21 @@ class Supervisor:
             validate_plan({'steps': [context['step']]})
         audit = []
         output_retry_used = False
+        encoded_images = {}
+
+        def encoded(label, frame):
+            if label not in encoded_images:
+                encoded_images[label] = image_part(frame)
+            return encoded_images[label]
 
         def api_response(*args, **kwargs):
             nonlocal output_retry_used
             reserve_calls = kwargs.pop('reserve_calls', 0)
             while True:
                 try:
-                    return self.api.response(*args, **kwargs)
+                    started = time.monotonic()
+                    result, usage = self.api.response(*args, **kwargs)
+                    return result, {**usage, 'wall_seconds': time.monotonic() - started}
                 except MetaAPIError as error:
                     failed_calls = error.api_calls
                     failed_audit = error.audit
@@ -318,6 +329,11 @@ class Supervisor:
         review_enabled = context.get('boundary_review_enabled', False)
         if type(review_enabled) is not bool:
             raise ValueError('boundary_review_enabled must be a boolean')
+        verification_mode = context.get('verification_mode', 'selective')
+        if verification_mode not in ('selective', 'always'):
+            raise ValueError('verification_mode must be selective or always')
+        selective = verification_mode == 'selective'
+        verification_feedback = None
         review_context = {key: context[key] for key in (
             'step', 'next_step', 'original_goal', 'observation_step', 'before_observation_step', 'observation_refs',
             'temporal_observations', 'depth_observations', 'robot_measurements', 'last_motion') if key in context}
@@ -330,7 +346,7 @@ class Supervisor:
             confirmation_content = [{'type': 'input_text', 'text': json.dumps({
                 'context': review_context, 'proposed_completion': assessment})}]
             for label, frame in sorted({**images, **depth_images}.items()):
-                confirmation_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
+                confirmation_content.extend([{'type': 'input_text', 'text': label}, encoded(label, frame)])
             confirmation, usage = api_response(self.model, confirmation_content,
                                                instructions=CONFIRMATION_POLICY, schema=CONFIRMATION_SCHEMA)
             audit.append({**usage, 'role': 'completion_confirmation'})
@@ -345,13 +361,13 @@ class Supervisor:
             return boundary_completion({**assessment, 'evidence': completion_confirmation['evidence'],
                                         'observation_refs': completion_confirmation['observation_refs']})
 
-        if (review_enabled and operation == 'decide' and remaining >= 2
+        if (review_enabled and not selective and operation == 'decide' and remaining >= 2
                 and context.get('observation_step', 0) > 0 and not context.get('planning_window_exhausted', False)):
             # Independent perception pass: exclude planner beliefs, ledger status,
             # failure history, catalogs and proposed motor instructions.
             review_content = [{'type': 'input_text', 'text': json.dumps(review_context)}]
             for label, frame in sorted({**images, **depth_images}.items()):
-                review_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
+                review_content.extend([{'type': 'input_text', 'text': label}, encoded(label, frame)])
             reviewed, usage = api_response(self.model, review_content, instructions=BOUNDARY_POLICY,
                                            schema=BOUNDARY_SCHEMA, reserve_calls=1)
             audit.append({**usage, 'role': 'boundary_review'})
@@ -387,7 +403,7 @@ class Supervisor:
             text, usage = api_response('sam-3.1', [
                 {'type': 'input_text', 'text': target}, media,
             ], reserve_calls=1)
-            audit.append(usage)
+            audit.append({**usage, 'role': 'sam'})
             tracks = tracking_records(text, frame.shape[1], frame.shape[0], len(clip)) if tracking else []
             grounding = {
                 'camera': key, 'target': target,
@@ -404,16 +420,17 @@ class Supervisor:
             'atomic_instruction_catalog': task_references(self.instruction_catalog, context),
             'atomic_instruction_forms': self.instruction_grounder.forms,
             'atomic_instruction_forms_kind': self.instruction_grounder.catalog['instruction_forms_kind'],
+            'reasoning_example': reasoning_example(context),
         })}]
         for name, frame in sorted({**images, **depth_images}.items()):
-            content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
+            content.extend([{'type': 'input_text', 'text': name}, encoded(name, frame)])
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
-        prompt = SUPERVISOR_POLICY + '\nOperation: ' + operation + '. Backend: ' + context.get('control_owner', 'gr00t') + '.'
+        prompt = SUPERVISOR_POLICY + '\n' + RECOVERY_GUIDANCE + '\nOperation: ' + operation + '. Backend: ' + context.get('control_owner', 'gr00t') + '.'
         current_cameras = {key for key in images if key.startswith('current:')}
         schema = grounded_plan_schema(current_cameras) if operation == 'plan' else DECISION_SCHEMA
         result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
-        audit.append(usage)
+        audit.append({**usage, 'role': 'planner'})
         validation_error = None
         if operation == 'plan':
             try:
@@ -457,7 +474,34 @@ class Supervisor:
                 # usage/audit and let the runner reject without motion, then feed
                 # the reason into the next budgeted decision.
                 validation_error = str(error)
-        if (review_enabled and operation == 'decide' and not validation_error
+        if review_enabled and selective and operation == 'decide' and not validation_error:
+            reasons = review_reasons(result, context)
+            if reasons:
+                if remaining - len(audit) < 1:
+                    check = {'validation_error': 'No API budget remains to verify consequential claims'}
+                else:
+                    check_content = [{'type': 'input_text', 'text': json.dumps({
+                        'context': review_context, 'previous_transport': previous_transport(context),
+                        'requirements': context.get('goal_ledger'),
+                        'verification_reasons': reasons, 'proposed_decision': result})}]
+                    for label, frame in sorted({**images, **depth_images}.items()):
+                        check_content.extend([{'type': 'input_text', 'text': label}, encoded(label, frame)])
+                    check, usage = api_response(self.model, check_content,
+                        instructions=TRANSITION_POLICY + ('\n' + CONFIRMATION_POLICY if 'stage_completion' in reasons else ''),
+                        schema=CONFIRMATION_SCHEMA)
+                    audit.append({**usage, 'role': 'selective_verification', 'reasons': reasons})
+                    try:
+                        check = validate_confirmation(check, context)
+                    except (ValueError, KeyError, TypeError) as error:
+                        check = {'validation_error': str(error)}
+                completion_confirmation = check
+                if check.get('verdict') != 'confirmed':
+                    verification_feedback = {'observation_step': context.get('observation_step'),
+                                             'reasons': reasons, 'review': check}
+                    result = unconfirmed_boundary(result['assessment'],
+                        'Consequential claims need revision or clearer evidence: '
+                        + str(check.get('evidence', check.get('validation_error', 'Uncertain review')))[:1500])
+        if (review_enabled and not selective and operation == 'decide' and not validation_error
                 and result.get('assessment', {}).get('outcome') == 'satisfied'
                 and not context.get('planning_window_exhausted', False)):
             accepted = confirm_completion(result['assessment'])
@@ -466,6 +510,9 @@ class Supervisor:
         return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
                 'boundary_review': boundary_review,
                 'completion_confirmation': completion_confirmation,
+                'verification_feedback': verification_feedback,
+                'supervision_metrics': {'verification_mode': verification_mode,
+                    'planner_rgb_images': len(images), 'verifier_rgb_images_available': len(images)},
                 'received_image_diagnostics': diagnostics, 'validation_error': validation_error}
 
 

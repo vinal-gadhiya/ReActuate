@@ -63,7 +63,9 @@ def evaluate_cases(manifest, client):
             else:
                 raise ValueError('Only plan and decide observations can be replayed')
             context = deepcopy(case['context'])
-            context['api_calls_left'] = 2
+            # Allow legacy review + planner + confirmation, optional SAM and
+            # one bounded output-limit retry. Avoid budget-induced abstentions.
+            context['api_calls_left'] = 5
             context['diagnostic_replay'] = True
             # Context is the captured public request. Expected labels stay here only.
             images = {}

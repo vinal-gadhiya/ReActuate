@@ -22,6 +22,15 @@ or clip tracking, and request bounded fixture navigation before resuming a pendi
 transfer. Motion diagnostics compare declared robot measurements and rendered
 images; they do not query private object poses or certify task progress.
 
+Supervision defaults to `--verification-mode selective`: one planner call for
+ordinary continuation, followed by an independent check for completion, recovery,
+new acquisition, loss/identity changes or consequential requirement/attempt claims.
+Both calls retain all supplied RGB cameras, dated history and optional depth.
+Rejected consequential claims produce inspection and feedback without applying
+their actions or memory/goal changes. `--verification-mode always` retains the
+previous pre-action review schedule for ablation. See [latency evaluation](LATENCY.md)
+for Thor commands, instrumentation and the performance acceptance criteria.
+
 `--planning-context summary` (default) also supplies a bounded episode notebook
 with the initial/current plan, accepted revisions and completion claims, executed
 attempts, object location changes, and recovery feedback. It survives the recent

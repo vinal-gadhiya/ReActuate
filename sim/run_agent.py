@@ -719,7 +719,9 @@ def main():
     parser.add_argument('--sam', action=argparse.BooleanOptionalAction, default=None,
                         help='Override supervisor SAM grounding for this run (--sam or --no-sam)')
     parser.add_argument('--boundary-review', action=argparse.BooleanOptionalAction, default=True,
-                        help='Independent visual stage review before action planning, within the shared API budget')
+                        help='Independently verify consequential visual claims within the shared API budget')
+    parser.add_argument('--verification-mode', choices=('selective', 'always'), default='selective',
+                        help='Selective: planner then consequential-claim check; always: legacy pre-action review')
     parser.add_argument('--sam-video', action='store_true', help='Opt into SAM clip tracking; default uses images only')
     parser.add_argument('--depth', action='store_true', help='Agent only: send aligned depth visualizations to Muse, never to the policy')
     parser.add_argument('--depth-max-metres', type=float, default=3.0, help='Fixed depth visualization range in metres (default: 3)')
@@ -859,11 +861,13 @@ def main():
             previous_images = None
             previous_depth_images = None
             previous_observation_step = None
+            verification_feedback = None
             initial_scene_assessment = None
             scene_assessment_source = None
 
             def ask(operation, context):
                 nonlocal api_calls, request_number, previous_images, previous_depth_images, previous_observation_step
+                nonlocal verification_feedback
                 if args.max_api_calls and api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
@@ -939,6 +943,8 @@ def main():
                     'observation_step': tools.steps, 'request_number': request_number,
                     'before_observation_step': previous_observation_step if operation == 'decide' else None,
                     'boundary_review_enabled': args.boundary_review,
+                    'verification_mode': args.verification_mode,
+                    'verification_feedback': verification_feedback,
                     'temporal_observations': temporal_mapping,
                     'observation_refs': [{'step': tools.steps, 'camera': key} for key in current] + (
                         [{'step': previous_observation_step, 'camera': key} for key in previous_images]
@@ -1014,6 +1020,7 @@ def main():
                     request_number += 1
                     raise
                 api_calls += response['api_calls']
+                verification_feedback = response.get('verification_feedback')
                 record({'event': 'supervisor_response', 'request': request_number,
                         'wall_seconds': time.monotonic() - request_started, **response})
                 previous_images = current

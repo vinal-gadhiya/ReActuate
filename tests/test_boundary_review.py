@@ -103,7 +103,7 @@ class BoundaryReviewTests(unittest.TestCase):
     def context(self, budget=3):
         active = step('a', 'Pick up the mug.')
         active['success_criteria'] = 'Mug supported by gripper and separated from source support.'
-        return {'boundary_review_enabled': True, 'api_calls_left': budget,
+        return {'boundary_review_enabled': True, 'verification_mode': 'always', 'api_calls_left': budget,
                 'observation_step': 32, 'before_observation_step': 0,
                 'observation_refs': [{'step': value, 'camera': 'current:video.wrist'} for value in (0, 8, 24, 32)],
                 'step': active, 'decision_step_limit': 32,

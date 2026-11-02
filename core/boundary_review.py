@@ -154,5 +154,6 @@ def unconfirmed_boundary(assessment, evidence):
     result = boundary_completion(assessment)
     result.update(status='inspect', evidence=evidence)
     result['assessment']['outcome'] = 'unknown'
+    result['assessment']['transport'] = None
     result['assessment']['evidence'] = evidence
     return result
