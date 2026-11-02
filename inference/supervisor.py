@@ -305,14 +305,30 @@ class Supervisor:
         if operation == 'decide':
             validate_plan({'steps': [context['step']]})
         audit = []
+        output_retry_used = False
 
         def api_response(*args, **kwargs):
-            try:
-                return self.api.response(*args, **kwargs)
-            except MetaAPIError as error:
-                error.api_calls = len(audit) + 1
-                error.audit = list(audit)
-                raise
+            nonlocal output_retry_used
+            reserve_calls = kwargs.pop('reserve_calls', 0)
+            while True:
+                try:
+                    return self.api.response(*args, **kwargs)
+                except MetaAPIError as error:
+                    failed_calls, failed_audit = error.api_calls, error.audit
+                    if (error.kind == 'output_limit' and not output_retry_used
+                            and remaining - len(audit) - failed_calls > reserve_calls):
+                        audit.extend({**item, 'role': 'output_limit'} for item in failed_audit)
+                        output_retry_used = True
+                        kwargs['max_output_tokens'] = min(16384, 2 * getattr(self.api, 'max_output_tokens', 8192))
+                        kwargs['instructions'] = (kwargs.get('instructions') or '') + (
+                            '\nThe previous response exceeded its output budget. Return concise schema-compliant '
+                            'JSON with brief evidence; avoid repeating the same explanation across fields.')
+                        continue
+                    error.api_calls = len(audit) + failed_calls
+                    error.audit = list(audit) + failed_audit
+                    if output_retry_used:
+                        error.allow_policy_continuation = False
+                    raise
 
         grounding = None
         boundary_review = None
@@ -359,7 +375,7 @@ class Supervisor:
             for label, frame in sorted({**images, **depth_images}.items()):
                 review_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
             reviewed, usage = api_response(self.model, review_content, instructions=BOUNDARY_POLICY,
-                                           schema=BOUNDARY_SCHEMA)
+                                           schema=BOUNDARY_SCHEMA, reserve_calls=1)
             audit.append({**usage, 'role': 'boundary_review'})
             try:
                 reviewed = validate_boundary_review(reviewed, context)
@@ -392,7 +408,7 @@ class Supervisor:
             media = video_part(clip) if tracking else image_part(frame)
             text, usage = api_response('sam-3.1', [
                 {'type': 'input_text', 'text': target}, media,
-            ])
+            ], reserve_calls=1)
             audit.append(usage)
             tracks = tracking_records(text, frame.shape[1], frame.shape[0], len(clip)) if tracking else []
             grounding = {
@@ -523,6 +539,7 @@ def make_handler(supervisor):
                 self.log_message('Upstream failure: retryable=%s attempted_calls=%d error=%s',
                                  error.retryable, error.api_calls, str(error))
                 self.reply(502, {'error': str(error), 'retryable': error.retryable,
+                                 'allow_policy_continuation': error.allow_policy_continuation,
                                  'api_calls': error.api_calls, 'audit': error.audit,
                                  'usage_unknown': True})
             except (ValueError, KeyError, SyntaxError) as error:

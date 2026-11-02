@@ -312,9 +312,16 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 supervisor_failures = 0
             except RetryableSupervisorError as error:
                 supervisor_failures += 1
+                if not error.allow_policy_continuation:
+                    stage_motion_authorized = False
                 record({'event': 'supervisor_unavailable', 'step': tools.steps, 'subtask': step['id'],
                         'error': str(error), 'consecutive_failures': supervisor_failures,
+                        'allow_policy_continuation': error.allow_policy_continuation,
                         'failure_limit': max_supervisor_failures})
+                if not stage_motion_authorized:
+                    if supervisor_failures > max_supervisor_failures:
+                        return 'supervisor_failure_limit'
+                    continue
                 if supervisor_failures > max_supervisor_failures:
                     if continue_active('supervisor_failure_limit'):
                         continue

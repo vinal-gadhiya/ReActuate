@@ -60,3 +60,12 @@ and wall time. This branch retains the older commit's execution/review schedule
 and finite API budget; it does not import the later main-branch latency or
 completion-dispute changes. Python tests and simulations must run in Thor
 containers, not on the local source-work host.
+
+Output-limit robustness fix: a Muse `incomplete/max_output_tokens` response now
+retains its usage audit and receives at most one bounded retry per supervisor
+request, with a larger output allowance (capped at 16,384) and concise-output
+instructions. Retries respect the shared API budget and preserve the requested
+schema, including opening-panel confirmation. If no complete response arrives,
+the runner retries supervision without robot motion and reports a structured
+failure when its configured failure allowance is exhausted. Partial JSON is
+never treated as a decision. Rebuild both sim and supervisor for this fix.

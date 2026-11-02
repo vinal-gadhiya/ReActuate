@@ -20,11 +20,13 @@ def image_part(frame):
 class MetaAPIError(RuntimeError):
     """An upstream error with a bounded, credential-redacted diagnostic."""
 
-    def __init__(self, message, retryable=False):
+    def __init__(self, message, retryable=False, kind=None, allow_policy_continuation=True):
         super().__init__(message)
         self.retryable = retryable
         self.api_calls = 1
         self.audit = []
+        self.kind = kind
+        self.allow_policy_continuation = allow_policy_continuation
 
 
 def output_text(response, allow_empty=False):
@@ -58,7 +60,7 @@ class MetaAPI:
         if not 1024 <= self.max_output_tokens <= 16384:
             raise ValueError('META_MAX_OUTPUT_TOKENS must be 1024–16384')
 
-    def response(self, model, content, instructions=None, schema=None):
+    def response(self, model, content, instructions=None, schema=None, max_output_tokens=None):
         body = {
             'model': model, 'input': [{'role': 'user', 'content': content}],
             'store': False,
@@ -66,7 +68,10 @@ class MetaAPI:
         # SAM returns segmentation records, not generated language. Keep Muse's
         # generation cap out of segmentation requests.
         if model != 'sam-3.1':
-            body['max_output_tokens'] = self.max_output_tokens
+            limit = self.max_output_tokens if max_output_tokens is None else max_output_tokens
+            if type(limit) is not int or not 1024 <= limit <= 16384:
+                raise ValueError('max_output_tokens must be 1024–16384')
+            body['max_output_tokens'] = limit
         else:
             body.pop('store')
         if instructions is not None:
@@ -100,6 +105,17 @@ class MetaAPI:
         if len(raw) > 8 * 1024 * 1024:
             raise RuntimeError('Meta response exceeds size limit')
         response = json.loads(raw)
+        incomplete = response.get('incomplete_details')
+        if (response.get('status') == 'incomplete' and isinstance(incomplete, dict)
+                and incomplete.get('reason') == 'max_output_tokens'):
+            error = MetaAPIError(f'{model}: Meta response exhausted max_output_tokens', retryable=True,
+                                 kind='output_limit', allow_policy_continuation=False)
+            # Preserve usage, but never parse or execute the truncated response.
+            error.audit = [{'response_id': response.get('id'), 'model': response.get('model', model),
+                            'usage': response.get('usage', {}), 'status': 'incomplete',
+                            'reason': 'max_output_tokens',
+                            'max_output_tokens': body.get('max_output_tokens')}]
+            raise error
         try:
             text = output_text(response, allow_empty=model == 'sam-3.1')
         except RuntimeError as error:
