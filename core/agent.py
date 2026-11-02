@@ -143,6 +143,8 @@ def validate_stage_program(commands):
     if name != 'run_groot':
         return
     instruction = arguments['instruction'].strip()
+    if re.search(r'\b(the|a|an)\s+\1\b', instruction, re.IGNORECASE):
+        raise ValueError('Remove duplicated articles from the instruction; use a clear object and observed source name')
     if len(instruction) > 96 or len(instruction.split()) > 12:
         raise ValueError('Use one concise action, at most 12 words and 96 characters; keep scene descriptions in memory/evidence')
     if re.match(r'^(?:open|close)\b', instruction, re.IGNORECASE) and (
@@ -155,6 +157,16 @@ def validate_stage_program(commands):
             r'(?:\b(?:and|then)\b|,)\s+(?:(?:then|gently|carefully)\s+)*(?:pick|place|put|navigate|open|close|pour|turn|wash|move|bring|carry|return|switch|stir|clean)\b',
             instruction, re.IGNORECASE)):
         raise ValueError('Separate pickup, placement, navigation and other actions into distinct stages with observations between them')
+
+
+def pickup_request(instruction):
+    """Extract declared pickup language for feedback; never infer object identity."""
+    text = instruction.strip().rstrip('.!?').strip()
+    match = re.fullmatch(r'pick(?:\s+up)?\s+(?:the\s+|an?\s+)?(.+?)(?:\s+from\s+(?:the\s+|an?\s+)?(.+))?',
+                         text, re.IGNORECASE)
+    if match is None or re.search(r'\b(?:and|then)\b|[,;\n]', text, re.IGNORECASE):
+        return None
+    return {'requested_object': match[1], 'requested_source': match[2] or ''}
 
 
 def validate_placement_destination(commands, planned_instruction):

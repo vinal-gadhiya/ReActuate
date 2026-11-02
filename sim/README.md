@@ -5,6 +5,10 @@ episode termination while preserving the older single-planner architecture.
 See [the experimental behavior and Thor commands](SIMULATOR_TERMINATION.md).
 The older early-exit behavior described below remains available with
 `--execution-policy bounded`.
+The experimental planner uses cause-based recovery guidance for all action
+types, with dated stage criteria and before/after claims. Source-grounded pickup
+and distractor staging are examples of that general process.
+See [grounding and recovery details](SIMULATOR_TERMINATION.md#general-recovery-reasoning-and-source-grounding).
 
 Own RoboCasa/MuJoCo setup, environment lifecycle, rendering, simulator-side
 policy clients, rollout recording, task scoring, and experiment execution.

@@ -8,6 +8,8 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 import json
 
+from core.agent import pickup_request
+
 
 def short(value, limit=300):
     value = str(value)
@@ -45,6 +47,10 @@ class EpisodeContext:
         self.instruction_attempts = OrderedDict()
         self.pending_executions = []
         self.outcome_reviews = deque(maxlen=8)
+        self.pickup_observations = deque(maxlen=12)
+        self.held_claim_epoch = 0
+        self.active_held_claim_epoch = None
+        self.last_grasp_observation_step = None
 
     @staticmethod
     def assessment_signature(assessment):
@@ -55,10 +61,21 @@ class EpisodeContext:
             'instruction_attempts': list(self.instruction_attempts.values())[-16:],
             'recent_outcome_reviews': list(self.outcome_reviews),
             'executions_awaiting_review': self.pending_executions,
+            'pickup_observations': list(self.pickup_observations),
+            'pickup_interpretation': 'Requested object/source are copied from executed language, not detections. '
+                                     'Reported held object and grasp are fallible Muse claims. held_claim_epoch '
+                                     'changes only after a newer empty-grasp claim followed by a supported grasp; '
+                                     'occlusion/uncertainty, a renamed held object, or another same-pose review '
+                                     'does not establish a new acquisition. Repeated bursts within one epoch '
+                                     'must not be counted as separate wrong-object acquisitions. Confirm '
+                                     'identity across cameras before proposing distractor relocation.',
             'interpretation': 'Actual execution counts paired with subsequent Muse assessments. '
                               'Unchanged assessment means no reported phase/grasp transition, not proof of failure: '
                               'use temporal images to distinguish useful approach from repeating a missed action. '
                               'Changed assessment is also a model claim, not verified progress. '
+                              'For every skill, compare planned_success_criteria with evidence_before, '
+                              'evidence_after and reported_scene_updates. Fixture state, access, activation '
+                              'or navigation can change while grasp and phase remain identical. '
                               'Feedback never changes policy actions or execution intervals.',
         })
 
@@ -89,6 +106,16 @@ class EpisodeContext:
             self.total_decisions += 1
             item.update(status=event['status'], evidence=short(event['evidence']))
             assessment = event.get('assessment', {})
+            # Preserve continuity through occlusion and same-pose reassessments.
+            # This tracks dated claims only, never declares an object wrong.
+            if self.last_grasp_observation_step is None or step > self.last_grasp_observation_step:
+                if assessment.get('grasp') == 'empty':
+                    self.active_held_claim_epoch = None
+                elif assessment.get('grasp') == 'supported' and assessment.get('held_object', '').strip():
+                    if self.active_held_claim_epoch is None:
+                        self.held_claim_epoch += 1
+                        self.active_held_claim_epoch = self.held_claim_epoch
+                self.last_grasp_observation_step = step
             item.update(phase=assessment.get('phase'), held_object=assessment.get('held_object'),
                         grasp=assessment.get('grasp'), destination=short(assessment.get('destination', ''), 180))
             for execution in self.pending_executions:
@@ -100,9 +127,27 @@ class EpisodeContext:
                     'step_before': execution['step_before'], 'step_after': execution['step_after'],
                     'review_step': step, 'assessment_before': execution['assessment_before'],
                     'assessment_after': {key: assessment.get(key) for key in ('phase', 'held_object', 'grasp')},
+                    'planned_target': execution['planned_target'],
+                    'planned_success_criteria': execution['planned_success_criteria'],
+                    'evidence_before': execution['evidence_before'],
+                    'evidence_after': short(assessment.get('evidence', event['evidence']), 160),
+                    'reported_scene_updates': [
+                        {key: short(entry.get(key, ''), 100) for key in
+                         ('name', 'kind', 'location', 'status', 'evidence')}
+                        for entry in event.get('memory_updates', [])[:3]],
                     'assessment_changed': changed, 'evidence': short(event['evidence']),
                     'same_assessment_bursts': attempt['same_assessment_bursts'],
                 })
+                requested = pickup_request(execution['instruction'])
+                if requested is not None:
+                    self.pickup_observations.append({
+                        **requested, 'subtask': execution['subtask'],
+                        'step_before': execution['step_before'], 'step_after': execution['step_after'],
+                        'review_step': step, 'reported_held_object': short(assessment.get('held_object', ''), 100),
+                        'reported_grasp': assessment.get('grasp'),
+                        'held_claim_epoch': self.active_held_claim_epoch,
+                        'evidence': short(assessment.get('evidence', event['evidence']), 300),
+                    })
             self.pending_executions = []
             self.latest_decision = dict(item)
             for entry in event.get('memory_updates', []):
@@ -136,6 +181,7 @@ class EpisodeContext:
             self.total_steps += count
             self.total_bursts += 1
             if count > 0:
+                planned = next((entry for entry in self.active_plan if entry['id'] == subtask), {})
                 key = ' '.join(instruction.casefold().split())
                 attempt = self.instruction_attempts.setdefault(key, {
                     'instruction': short(instruction, 240), 'bursts': 0,
@@ -146,6 +192,9 @@ class EpisodeContext:
                 self.pending_executions.append({
                     'key': key, 'subtask': subtask, 'instruction': short(instruction, 240),
                     'step_before': event['step_before'], 'step_after': step,
+                    'planned_target': short(planned.get('target', ''), 100),
+                    'planned_success_criteria': short(planned.get('success_criteria', ''), 160),
+                    'evidence_before': short((self.latest_decision or {}).get('evidence', ''), 160),
                     'assessment_before': {field: (self.latest_decision or {}).get(field)
                                           for field in ('phase', 'held_object', 'grasp')},
                 })
