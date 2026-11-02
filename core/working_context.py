@@ -62,7 +62,7 @@ def working_context(context):
             belief.update(trail)
             identity_chars_left -= size
     selected = {key: deepcopy(context[key]) for key in (
-        'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used', 'last_stage_transition',
+        'original_goal', 'goal_ledger', 'step', 'next_step', 'subtask_steps_used', 'last_stage_transition', 'last_stage_dispute',
         'subtask_budget_mode', 'planning_window_exhausted', 'candidate_plan', 'diagnostic_replay',
         'observation_step', 'before_observation_step', 'observation_refs', 'depth_observations',
         'temporal_observations', 'boundary_review_enabled', 'verification_mode', 'verification_feedback',

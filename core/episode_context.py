@@ -83,6 +83,10 @@ class EpisodeContext:
                     **{key: short(survey[key], 500) for key in
                        ('ordering_constraints', 'first_action_rationale', 'route_rationale')},
                 }
+        elif kind == 'stage_completion_disputed':
+            self.completed.pop(subtask, None)
+            item.update(reason=short(event['reason']))
+            self.changes.append(dict(item))
         elif kind == 'plan_replaced':
             # Only accepted runner events change the plan, never a proposal.
             self.active_plan = deepcopy(event['steps'])

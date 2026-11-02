@@ -81,6 +81,16 @@ proposals and model stops also trigger logged continuation. A completed window
 still requires supervision to supply a valid next window; no new action is invented
 if that cannot be obtained. Real execution errors remain errors.
 
+In episode mode, repeated inspection at a window boundary requests more planning
+instead of ending with `perception_stall`. A matching current verifier dispute
+can reopen the last completed stage, including at the same simulator step.
+Related satisfaction claims become unknown, with the old claims retained in
+audit history; this does not assert object loss or physical failure. The planner
+resumes the original pending instruction or proposes a justified recovery.
+Placement verification separately checks destination support and gripper release;
+an object still carried toward its destination is partial progress. Completion
+review omits the planner's assessment narrative to reduce agreement bias.
+
 Changing an unfinished stage requires current observation references and a
 specific `recovery.necessity`, not merely a few failed bursts or another tool
 alias. Completion needs current satisfied evidence. These rules are shared across

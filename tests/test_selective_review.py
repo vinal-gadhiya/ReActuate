@@ -69,12 +69,16 @@ class SelectiveReviewTests(unittest.TestCase):
                 result = Supervisor(api, 'muse').handle('decide', context(), self.images())
                 self.assertEqual(result['api_calls'], 2)
                 self.assertEqual(result['result']['status'], 'complete' if accepted else 'inspect')
+                reviewer_input = json.loads(api.calls[-1][0][0]['text'])
+                self.assertNotIn('assessment', reviewer_input['proposed_decision'])
                 if not accepted:
                     for field in ('goal_updates', 'attempt_reports', 'memory_updates', 'replacement_steps'):
                         self.assertEqual(result['result'][field], [])
                     self.assertIsNone(result['result']['assessment']['transport'])
                     self.assertIsNone(result['result']['action'])
                     self.assertIsNotNone(result['verification_feedback'])
+                    self.assertTrue(result['verification_feedback']['completion_disputed'])
+                    self.assertEqual(result['verification_feedback']['stage_id'], 'a')
 
     def test_budget_exhaustion_cannot_accept_unverified_completion(self):
         api = API(candidate('complete'))

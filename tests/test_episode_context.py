@@ -13,6 +13,16 @@ from tests.test_agent import FakeTools, decision, step
 
 
 class EpisodeContextTests(unittest.TestCase):
+    def test_disputed_completion_is_removed_from_active_notebook_claims(self):
+        journal = self.journal()
+        journal.observe({'event': 'subtask_transition', 'step': 32,
+                         'completed_step': step('mug', 'Transfer mug'),
+                         'completion_evidence': 'Placement claimed.'})
+        journal.observe({'event': 'stage_completion_disputed', 'step': 32, 'subtask': 'mug',
+                         'reason': 'Review shows object still held.'})
+        self.assertEqual(journal.context(32)['completed_claims'], [])
+        self.assertIn('mug', [item['id'] for item in journal.context(32)['unfinished_plan']])
+
     def journal(self):
         journal = EpisodeContext()
         journal.observe({'event': 'initial_plan', 'goal': 'Arrange tea',

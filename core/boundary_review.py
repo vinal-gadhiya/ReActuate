@@ -43,6 +43,12 @@ object left at the source may be a different instance. Do not require later
 transport or every camera to expose the grasp. Occlusion alone is not failure.
 For placement, check intended support/containment and release rather than mere
 overlap. For navigation, check arrival rather than destination visibility alone.
+For placement/transfer, report destination support and gripper release as separate
+condition checks. A carried object approaching or overlapping its destination is
+partial progress. Establish the object/support relation across useful views and
+finger-relative motion; a change in viewpoint is not a placement. If separation
+or release is occluded, leave that condition unknown. Do not infer empty fingers
+from a hidden wrist view or treat movement toward the goal as execution failure.
 For all other actions, require the intended physical effect, not approach/motion.
 Use the relevant camera views, not majority voting. Historical frames establish
 change, but each confirmed condition needs current evidence. Respect the stage

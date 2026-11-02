@@ -89,6 +89,77 @@ class EpisodeExecutionTests(unittest.TestCase):
         self.assertEqual(tools.instructions, [instruction, instruction])
         self.assertFalse(any(event['event'] == 'subtask_transition' for event in events))
 
+    def test_disputed_completion_reopens_transfer_at_same_step_and_reaches_physical_horizon(self):
+        instruction = 'Pick the bowl from the counter and place it on the tray.'
+        ledger, tools, events, plan = self.setup_episode(instruction, 64)
+        feedback, calls = {}, []
+
+        def decide(*args):
+            calls.append(tools.steps)
+            feedback.clear()
+            if len(calls) == 2:
+                return proposal('complete', tools.steps, goal_updates=[update('first', 'satisfied', tools.steps)])
+            if len(calls) == 3:
+                feedback.update(observation_step=tools.steps, stage_id='active', completion_disputed=True,
+                    review={'verdict': 'incomplete', 'evidence': 'Object remains held while approaching support.',
+                            'observation_refs': refs(tools.steps)})
+                return proposal('inspect', tools.steps)
+            result = proposal('continue', tools.steps, instruction)
+            result['program'] = f'run_groot(instruction={instruction!r}, steps=32)'
+            return result
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=0,
+                                  review_feedback=lambda: feedback)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(calls, [0, 32, 32, 32])
+        self.assertEqual(tools.instructions, [instruction, instruction])
+        self.assertEqual(ledger.requirements['first']['status'], 'unknown')
+        self.assertEqual(sum(event['event'] == 'stage_completion_disputed' for event in events), 1)
+
+    def test_repeated_boundary_inspections_request_new_window_instead_of_terminating(self):
+        ledger, tools, events, plan = self.setup_episode('Open the cabinet.', 3)
+        calls = []
+
+        def decide(*args):
+            calls.append(tools.steps)
+            if len(calls) == 1:
+                return proposal('continue', tools.steps, 'Open the cabinet.')
+            if len(calls) == 2:
+                return proposal('complete', tools.steps)
+            if len(calls) <= 5:
+                return proposal('inspect', tools.steps)
+            if len(calls) == 6:
+                return proposal('replan', tools.steps,
+                                replacement=[stage('next', 'first', 'Pick up the bowl.')])
+            return proposal('continue', tools.steps, 'Pick up the bowl.')
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=20)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.instructions, ['Open the cabinet.', 'Pick up the bowl.', 'Pick up the bowl.'])
+        self.assertTrue(any(event['event'] == 'recovery_required' for event in events))
+
+    def test_stale_or_unrelated_review_cannot_replay_completed_work(self):
+        for review_step, review_stage in ((0, 'active'), (1, 'other-stage')):
+            with self.subTest(review_step=review_step, review_stage=review_stage):
+                ledger, tools, events, plan = self.setup_episode('Open the cabinet.', 64)
+                calls = []
+
+                def decide(*args):
+                    calls.append(tools.steps)
+                    if len(calls) == 1:
+                        return proposal('continue', tools.steps, 'Open the cabinet.')
+                    return proposal('complete' if len(calls) == 2 else 'inspect', tools.steps)
+
+                feedback = {'observation_step': review_step, 'stage_id': review_stage,
+                            'completion_disputed': True,
+                            'review': {'verdict': 'incomplete', 'evidence': 'Unrelated review.',
+                                       'observation_refs': refs(review_step)}}
+                reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=6,
+                                          review_feedback=lambda: feedback)
+                self.assertEqual(reason, 'decision_budget')
+                self.assertEqual(tools.instructions, ['Open the cabinet.'])
+                self.assertFalse(any(event['event'] == 'stage_completion_disputed' for event in events))
+
     def setup_episode(self, instruction, max_steps=2000):
         ledger = GoalLedger('Required outcomes', [definitions()[0]])
         tools, events = FakeTools(), []

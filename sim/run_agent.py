@@ -214,7 +214,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
                  concise_instructions=False, max_stop_continuations=None,
                  goal_ledger=None, attempt_history=None, instruction_adapter=None, instruction_grounder=None,
-                 execution_policy='bounded'):
+                 execution_policy='bounded', review_feedback=None):
     if execution_policy not in ('bounded', 'episode'):
         raise ValueError('Unknown execution policy')
     persistent = mode == 'agent' and execution_policy == 'episode'
@@ -459,11 +459,43 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
         else:
             consecutive_stop_continuations = 0
         if status == 'inspect':
+            feedback = review_feedback() if review_feedback is not None else None
+            review = (feedback or {}).get('review') or {}
+            if (persistent and window_exhausted and feedback
+                    and feedback.get('completion_disputed') is True
+                    and feedback.get('stage_id') == step['id']
+                    and feedback.get('observation_step') == tools.steps
+                    and review.get('verdict') in ('incomplete', 'uncertain')):
+                # Completion is a fallible claim, not an irreversible transition.
+                refs = review['observation_refs']
+                if ledger is not None:
+                    ledger.dispute_satisfaction(step['goal_ids'], tools.steps, review['evidence'], refs)
+                    record({'event': 'goal_state', 'step': tools.steps, 'ledger': ledger.context(),
+                            'attempt_history': attempts.context(step['goal_ids'])})
+                window_exhausted, completed_stage_id = False, None
+                stage_motion_authorized = True
+                last_inspection, repeated_inspections = None, 0
+                record({'event': 'stage_completion_disputed', 'step': tools.steps,
+                        'subtask': step['id'], 'review': review,
+                        'reason': 'Completion is uncertain; resume supervision of the original pending stage.'})
+                record({'event': 'plan_replaced', 'step': tools.steps, 'subtask': step['id'],
+                        'steps': deepcopy(plan), 'kind': 'completion_dispute',
+                        'reason': 'Reopen disputed completion while preserving requirements and policy instruction.'})
+                continue
             inspection = (tools.steps, tuple(sorted(decision['perception'].items())))
             repeated_inspections = repeated_inspections + 1 if inspection == last_inspection else 1
             last_inspection = inspection
             if repeated_inspections >= 3:
                 if continue_active('repeated_inspection_without_new_pose'):
+                    continue
+                if persistent:
+                    record({'event': 'recovery_required', 'step': tools.steps,
+                            'reason': 'Repeated inspection supplies no new physical evidence. '
+                                      'Reconcile disputed claims and provide a next action window or recovery; '
+                                      'do not re-complete an exhausted window.'})
+                    last_inspection, repeated_inspections = None, 0
+                    if hasattr(tools, 'refresh_observation'):
+                        tools.refresh_observation()
                     continue
                 return 'perception_stall'
             if hasattr(tools, 'refresh_observation'):
@@ -934,6 +966,8 @@ def main():
                         'stage_completion_normalized')][-3:],
                     'last_stage_transition': next((item for item in reversed(history)
                                                    if item['event'] == 'subtask_transition'), None),
+                    'last_stage_dispute': next((item for item in reversed(history)
+                                               if item['event'] == 'stage_completion_disputed'), None),
                     'depth_observations': depth_context,
                     'api_calls_left': calls_left, 'simulator_context': simulator_context,
                     'scene_memory': memory.context(), 'perception_query': memory.perception,
@@ -955,7 +989,8 @@ def main():
                                                max(0, args.max_navigation_bursts - memory.navigation_bursts)),
                     'navigation_budget_mode': 'episode' if args.max_navigation_bursts is None else 'burst_cap',
                     'replans_left': None if args.max_replans < 0 else max(0, args.max_replans - sum(
-                        item['event'] == 'plan_replaced' and item.get('kind') not in ('window_extension', 'completion_replan') for item in history)),
+                        item['event'] == 'plan_replaced' and item.get('kind') not in (
+                            'window_extension', 'completion_replan', 'completion_dispute') for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'recent_motion': [{
                         'tool': item['tool'], 'step_before': item['step_before'], 'step_after': item['step_after'],
@@ -1116,6 +1151,7 @@ def main():
                     instruction_adapter=PolicyInstructionAdapter('patchwam' if metadata.get('policy') == 'patchwam' else 'gr00t'),
                     instruction_grounder=atomic_instruction_grounder() if args.mode == 'agent' else None,
                     execution_policy=args.execution_policy,
+                    review_feedback=lambda: verification_feedback,
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,

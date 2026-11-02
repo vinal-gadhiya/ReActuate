@@ -134,6 +134,32 @@ class GoalLedger:
         self.requirements = candidate
         self.history.extend({'step': current_step, **deepcopy(update)} for update in updates)
 
+    def dispute_satisfaction(self, goal_ids, current_step, evidence, observation_refs):
+        """Withdraw confidence, including same-frame conflicts, not assert failure.
+
+        Ordinary satisfied -> unsatisfied changes still require newer evidence.
+        Retain the old claim and invalidate dependent satisfaction confidence.
+        """
+        self.validate_refs(observation_refs, current_step)
+        if (not evidence or any(identifier not in self.requirements for identifier in goal_ids)
+                or not any(ref['step'] == current_step for ref in observation_refs)):
+            raise ValueError('Disputing satisfaction needs known requirements and current evidence')
+        affected = set(goal_ids)
+        while True:
+            dependents = {identifier for identifier, item in self.requirements.items()
+                          if affected.intersection(item['dependencies'])}
+            if dependents <= affected:
+                break
+            affected.update(dependents)
+        for identifier, item in self.requirements.items():
+            if identifier not in affected or item['status'] != 'satisfied':
+                continue
+            previous = deepcopy(item)
+            item.update(status='unknown', evidence=evidence, observation_refs=deepcopy(observation_refs))
+            self.history.append({'step': current_step, 'goal_id': identifier, 'status': 'unknown',
+                                 'evidence': evidence, 'observation_refs': deepcopy(observation_refs),
+                                 'kind': 'completion_disputed', 'previous_claim': previous})
+
     def validate_stage(self, stage):
         ids = stage.get('goal_ids')
         if not isinstance(ids, list) or not ids or any(not isinstance(item, str) for item in ids) or len(ids) != len(set(ids)):

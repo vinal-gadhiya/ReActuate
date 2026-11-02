@@ -150,6 +150,13 @@ the pending stage or explicitly replan to retain it. Otherwise keep its instruct
 Complete requires current evidence, not old before views alone. Attempt reports
 may cite both before and after frames, but need at least one after-action frame.
 Repeated evidence paraphrases for the SAME outcome do not count as more failures.
+Completion claims remain fallible, including a contradictory interpretation of
+the same simulator step. When planning_window_exhausted is true, return a next
+window for pending requirements; do not repeatedly complete or inspect the old
+stage. If its completion is disputed, explain the current contradiction and
+repair the pending work, preserving any supported grasp and productive approach.
+verification_feedback overrides historical handoff confidence; it asserts
+uncertainty, not automatic object loss or physical failure.
 
 Complete a stage only with supported satisfied current evidence. Report readiness
 for subsequent work separately. Replan changes only the next action window; it cannot edit
@@ -495,10 +502,16 @@ class Supervisor:
                 if remaining - len(audit) < 1:
                     check = {'validation_error': 'No API budget remains to verify consequential claims'}
                 else:
+                    # Verify completion from criteria and pixels without the
+                    # planner's outcome/evidence narrative anchoring the review.
+                    proposed_claims = {key: result.get(key) for key in (
+                        'action', 'recovery', 'replacement_steps', 'goal_updates', 'attempt_reports')}
+                    if 'stage_completion' not in reasons:
+                        proposed_claims['assessment'] = result['assessment']
                     check_content = [{'type': 'input_text', 'text': json.dumps({
                         'context': review_context, 'previous_transport': previous_transport(context),
                         'requirements': context.get('goal_ledger'),
-                        'verification_reasons': reasons, 'proposed_decision': result})}]
+                        'verification_reasons': reasons, 'proposed_decision': proposed_claims})}]
                     for label, frame in sorted({**images, **depth_images}.items()):
                         check_content.extend([{'type': 'input_text', 'text': label}, encoded(label, frame)])
                     check, usage = api_response(self.model, check_content,
@@ -512,6 +525,8 @@ class Supervisor:
                 completion_confirmation = check
                 if check.get('verdict') != 'confirmed':
                     verification_feedback = {'observation_step': context.get('observation_step'),
+                                             'stage_id': context['step']['id'],
+                                             'completion_disputed': 'stage_completion' in reasons,
                                              'reasons': reasons, 'review': check}
                     result = unconfirmed_boundary(result['assessment'],
                         'Consequential claims need revision or clearer evidence: '

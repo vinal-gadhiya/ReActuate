@@ -41,6 +41,20 @@ def stage(identifier, goal_id, instruction='Execute the next supported action.')
 
 
 class GoalLedgerTests(unittest.TestCase):
+    def test_same_frame_dispute_withdraws_confidence_without_claiming_physical_failure(self):
+        ledger = GoalLedger('Original outcomes', definitions())
+        ledger.observe(32, ['current:camera'])
+        ledger.apply_updates([update('first', 'satisfied', 32), update('second', 'satisfied', 32)], 32)
+        original = ledger.definitions()
+        with self.assertRaises(ValueError):
+            ledger.apply_updates([update('first', 'unsatisfied', 32)], 32)
+        ledger.dispute_satisfaction(['first'], 32, 'Current review cannot establish release.', refs(32))
+        self.assertEqual(ledger.definitions(), original)
+        self.assertEqual([item['status'] for item in ledger.requirements.values()], ['unknown', 'unknown'])
+        self.assertEqual(ledger.history[-2]['previous_claim']['status'], 'satisfied')
+        with self.assertRaises(ValueError):
+            ledger.dispute_satisfaction(['first'], 33, 'Stale review.', refs(32))
+
     def test_dependencies_and_duplicate_requirements_are_checked_without_task_names(self):
         validate_requirements(definitions())
         for bad in ([definitions()[0], definitions()[0]],
