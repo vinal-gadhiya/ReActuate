@@ -60,7 +60,10 @@ committed atomic instruction until verified complete, a necessary evidence-backe
 intervention, simulator success/end, or the physical episode horizon. Use
 `--max-steps 2000` for a 2,000-step horizon. A burst is an observation interval;
 short failure/recovery limits and planned subtask ceilings do not end execution.
-Decision/API limits cap supervision; when exhausted, bounded policy bursts keep
+Decision/API/replan caps are disabled by default. Use `--max-decisions 0
+--max-api-calls 0 --max-replans -1 --max-steps 4000` to retain supervision through
+a 4,000-step physical horizon. Per-request API allowances refresh every request.
+Explicit positive decision/API caps remain supported; when exhausted, bounded policy bursts keep
 the unfinished committed stage without advancing unverified work. Invalid
 proposals and model stops also trigger logged continuation. A completed window
 still requires supervision to supply a valid next window; no new action is invented

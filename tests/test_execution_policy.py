@@ -4,7 +4,7 @@ import unittest
 
 from core.agent import validate_decision
 from core.atomic_language import AtomicInstructionGrounder
-from core.execution import validate_stage_switch
+from core.execution import validate_stage_switch, supervision_budget
 from core.goals import AttemptHistory, GoalLedger
 from sim.run_agent import run_subtasks
 from tests.test_agent import FakeTools, decision
@@ -12,6 +12,30 @@ from tests.test_goals import definitions, proposal, refs, stage, update
 
 
 class EpisodeExecutionTests(unittest.TestCase):
+    def test_unlimited_supervision_reaches_4000_steps_without_blind_continuation(self):
+        ledger, tools, events, plan = self.setup_episode('Pick up the bowl.', 4000)
+        limits = []
+
+        def decide(active_plan, index, spent, limit):
+            limits.append(limit)
+            result = proposal('continue', tools.steps, 'Pick up the bowl.')
+            result['program'] = f'run_groot(instruction="Pick up the bowl.", steps={limit})'
+            return result
+
+        reason = self.run_episode(ledger, tools, events, plan, decide, max_decisions=0, max_replans=-1)
+        self.assertEqual(reason, 'episode_step_budget')
+        self.assertEqual(tools.steps, 4000)
+        self.assertEqual(len(limits), 125)
+        self.assertFalse(any(event['event'] == 'policy_continuation' for event in events))
+
+    def test_api_allowance_refreshes_after_200_total_calls_without_hiding_finite_caps(self):
+        for used in (0, 200, 500, 10000):
+            self.assertEqual(supervision_budget(0, 0, used, used, 4000, 32), (None, 200, 4000))
+        self.assertEqual(supervision_budget(0, 500, 20, 200, 4000, 32), (None, 200, 4000))
+        self.assertEqual(supervision_budget(0, 500, 20, 499, 4000, 32), (None, 1, 32))
+        self.assertEqual(supervision_budget(0, 500, 20, 500, 4000, 32), (None, 0, 0))
+        self.assertEqual(supervision_budget(10, 0, 10, 500, 4000, 32), (0, 200, 0))
+
     def setup_episode(self, instruction, max_steps=2000):
         ledger = GoalLedger('Required outcomes', [definitions()[0]])
         tools, events = FakeTools(), []

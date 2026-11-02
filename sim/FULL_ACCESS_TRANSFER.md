@@ -47,7 +47,7 @@ sudo docker compose -f compose.yaml -f compose.patchwam.yaml --profile agent run
   --split pretrain --seed 0 --episodes 1 --expected-policy patchwam \
   --require-unseen-composite --execution-policy episode \
   --action-steps 16 --decision-steps 32 --max-steps 4000 \
-  --max-decisions 190 --max-api-calls 200 --max-replans 20 \
+  --max-decisions 0 --max-api-calls 0 --max-replans -1 \
   --planning-context summary --boundary-review --no-sam \
   --output /outputs/2953296-full-access-transfer-ArrangeBreadBasket-001
 ```
@@ -57,9 +57,17 @@ review enabled to exercise panel confirmation. Compare with the base branch on
 matched scenes across task families, including paired doors, single doors and
 drawers. Report task success, regressions, recovery outcomes, operational errors
 and wall time. This branch retains the older commit's execution/review schedule
-and finite API budget; it does not import the later main-branch latency or
+but now defaults to unlimited decision/API/replan budgets; it does not import the later main-branch latency or
 completion-dispute changes. Python tests and simulations must run in Thor
 containers, not on the local source-work host.
+
+Use `--max-steps 4000 --max-decisions 0 --max-api-calls 0 --max-replans -1`
+to retain supervision through the 4,000-step episode horizon. Zero decision/API
+caps mean unlimited; -1 means unlimited replans. The 200-call allowance in an
+individual supervisor request refreshes every request and is not an episode cap.
+Explicit positive decision/API caps and nonnegative replan caps remain supported.
+Real execution/API failures can still end a run; unlimited supervision does not
+override the bounded error handling or supply missing physical evidence.
 
 Output-limit robustness fix: a Muse `incomplete/max_output_tokens` response now
 retains its usage audit and receives at most one bounded retry per supervisor

@@ -9,6 +9,19 @@ SWITCH_REASONS = {'blocked_access', 'wrong_target', 'object_loss', 'unsafe_state
                   'goal_contradiction', 'useful_required_object_held', 'execution_failure'}
 
 
+def supervision_budget(max_decisions, max_api_calls, decisions_used, api_calls_used,
+                       episode_steps_left, decision_steps):
+    """Separate optional episode caps from the bounded wire-request allowance."""
+    decisions_left = max(0, max_decisions - decisions_used) if max_decisions else None
+    total_calls_left = max(0, max_api_calls - api_calls_used) if max_api_calls else None
+    request_calls = 200 if total_calls_left is None else min(200, total_calls_left)
+    motion_bound = episode_steps_left
+    for remaining in (decisions_left, total_calls_left):
+        if remaining is not None:
+            motion_bound = min(motion_bound, remaining * decision_steps)
+    return decisions_left, request_calls, motion_bound
+
+
 def completed_stage_decision(decision, current_step, ledger=None):
     """Separate a supported stage outcome from a model's next-action proposal.
 

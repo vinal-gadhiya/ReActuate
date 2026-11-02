@@ -130,6 +130,9 @@ bounded alternative exists. New evidence may remain uncertain.
 When execution_policy is episode, physical execution continues until simulator
 success/end or episode step exhaustion (real execution errors still fail). API
 and decision budgets limit supervision, not the physical execution budget. Model
+contexts with decisions_left=null and replans_left=null have no episode-wide
+decision/replan caps. api_calls_left is a fresh per-request allowance when the
+operator uses --max-api-calls 0; it is not a lifetime episode API limit. Model
 stop, invalid decisions, and short failure/recovery limits do not end execution:
 the runner continues the committed active stage in bounded feedback bursts.
 max_steps on a planned stage is advisory in this mode. A burst of 32 control steps

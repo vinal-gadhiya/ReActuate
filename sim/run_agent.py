@@ -21,7 +21,7 @@ from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
-from core.execution import completed_stage_decision, validate_stage_switch
+from core.execution import completed_stage_decision, validate_stage_switch, supervision_budget
 from core.boundary_review import temporal_snapshots
 from copy import deepcopy
 from core.episode_context import EpisodeContext
@@ -302,7 +302,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                 'replacement_steps': [],
             }
         else:
-            if decisions >= max_decisions:
+            if max_decisions and decisions >= max_decisions:
                 if continue_active('decision_budget_exhausted'):
                     continue
                 return 'decision_budget'
@@ -522,7 +522,7 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
             stage_motion_authorized = False
             continue
         if status == 'replan':
-            if not window_exhausted and replans >= max_replans:
+            if not window_exhausted and max_replans >= 0 and replans >= max_replans:
                 if continue_active('replan_budget_exhausted'):
                     continue
                 return 'replan_budget'
@@ -693,9 +693,9 @@ def main():
     parser.add_argument('--action-steps', type=int,
                         help='Actions executed per prediction; default: backend recommendation, otherwise 8')
     parser.add_argument('--decision-steps', type=int, default=40)
-    parser.add_argument('--max-decisions', type=int, default=40)
-    parser.add_argument('--max-api-calls', type=int, default=60)
-    parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-decisions', type=int, default=0, help='Total decision cap; 0 means unlimited (default)')
+    parser.add_argument('--max-api-calls', type=int, default=0, help='Total API call cap; 0 means unlimited (default)')
+    parser.add_argument('--max-replans', type=int, default=-1, help='Recovery replan cap; -1 means unlimited (default)')
     parser.add_argument('--max-goal-failures', type=int, default=3,
                         help='Supported unsuccessful outcomes before requiring a changed recovery')
     parser.add_argument('--max-goal-recoveries', type=int, default=2)
@@ -725,11 +725,11 @@ def main():
     parser.add_argument('--plan-only', action='store_true', help='Generate and save a plan without stepping the robot')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    for key in ('episodes', 'decision_steps', 'max_decisions', 'max_api_calls'):
+    for key in ('episodes', 'decision_steps'):
         if getattr(args, key) <= 0:
             parser.error(f'{key} must be positive')
-    if args.decision_steps > 80 or args.max_api_calls > 200 or args.max_replans < 0:
-        parser.error('Decision steps <= 80, API calls <= 200, and replans >= 0 are required')
+    if args.decision_steps > 80 or args.max_decisions < 0 or args.max_api_calls < 0 or args.max_replans < -1:
+        parser.error('Decision steps <= 80, nonnegative decision/API caps, and replans >= -1 are required')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
     if args.max_supervisor_failures < 0:
@@ -861,7 +861,7 @@ def main():
 
             def ask(operation, context):
                 nonlocal api_calls, request_number, previous_images, previous_depth_images, previous_observation_step
-                if api_calls >= args.max_api_calls:
+                if args.max_api_calls and api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
                 if ledger is not None:
@@ -910,9 +910,11 @@ def main():
                     np.savez_compressed(directory / clip_file, **clips, steps=np.asarray(clip_steps))
                     references.append({'label': 'temporal camera samples', 'path': clip_file})
                 decisions_used = sum(item['event'] in ('decision', 'invalid_decision', 'supervisor_unavailable') for item in history)
-                decisions_left = max(0, args.max_decisions - decisions_used)
-                calls_left = args.max_api_calls - api_calls
-                motion_bound = min(max_steps - tools.steps, min(decisions_left, calls_left) * args.decision_steps)
+                # Per-request allowance, refreshed when no episode-wide cap is
+                # configured. It is NOT a 200-call episode cap.
+                decisions_left, calls_left, motion_bound = supervision_budget(
+                    args.max_decisions, args.max_api_calls, decisions_used, api_calls,
+                    max_steps - tools.steps, args.decision_steps)
                 context.update({
                     'working_context_version': 2,
                     'execution_policy': args.execution_policy,
@@ -942,7 +944,7 @@ def main():
                     'navigation_bursts_left': (None if args.max_navigation_bursts is None else
                                                max(0, args.max_navigation_bursts - memory.navigation_bursts)),
                     'navigation_budget_mode': 'episode' if args.max_navigation_bursts is None else 'burst_cap',
-                    'replans_left': max(0, args.max_replans - sum(
+                    'replans_left': None if args.max_replans < 0 else max(0, args.max_replans - sum(
                         item['event'] == 'plan_replaced' and item.get('kind') not in ('window_extension', 'completion_replan') for item in history)),
                     'last_motion': tools.last_diagnostics,
                     'recent_motion': [{
@@ -952,7 +954,7 @@ def main():
                         'note': 'Kinematic changes, not task-progress labels; compare with the images.',
                     } for item in [entry for entry in history if entry['event'] == 'tool'][-5:]],
                     'remaining_execution_options': {
-                        'run_groot': tools.steps < max_steps and decisions_left > 0 and calls_left > 0,
+                        'run_groot': tools.steps < max_steps and (decisions_left is None or decisions_left > 0) and calls_left > 0,
                         'scope': 'Navigation has no separate burst cap by default; null navigation_bursts_left '
                                  'means episode, subtask, decision and API limits apply. An explicit zero cap '
                                  'disables navigation. Neither zero navigation nor zero replans disables manipulation.',

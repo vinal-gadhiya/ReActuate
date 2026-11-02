@@ -225,9 +225,9 @@ def main():
     parser.add_argument('--decision-steps', type=int, default=40)
     parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
                         help='Persistent episode summary or recent events only; object memory is retained in both')
-    parser.add_argument('--max-decisions', type=int, default=90)
-    parser.add_argument('--max-api-calls', type=int, default=200)
-    parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-decisions', type=int, default=0, help='0 means unlimited')
+    parser.add_argument('--max-api-calls', type=int, default=0, help='0 means unlimited')
+    parser.add_argument('--max-replans', type=int, default=-1, help='-1 means unlimited')
     parser.add_argument('--max-goal-failures', type=int, default=3)
     parser.add_argument('--max-goal-recoveries', type=int, default=2)
     parser.add_argument('--max-supervisor-failures', type=int, default=3)
@@ -267,7 +267,7 @@ def main():
     if len(set(args.seeds)) != len(args.seeds):
         parser.error('Seeds must be unique')
     if not ((args.action_steps is None or args.action_steps > 0) and 1 <= args.decision_steps <= 80
-            and args.max_decisions > 0 and 1 <= args.max_api_calls <= 200 and args.max_replans >= 0):
+            and args.max_decisions >= 0 and args.max_api_calls >= 0 and args.max_replans >= -1):
         parser.error('Invalid execution budgets')
     if args.max_steps is not None and args.max_steps <= 0:
         parser.error('--max-steps must be positive')
