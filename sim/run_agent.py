@@ -872,6 +872,8 @@ def main():
         ledger, attempts = None, None
 
         def record(event):
+            if event['event'] == 'situational_planning':
+                (directory / 'situational_plan.json').write_text(json.dumps(event['state'], indent=2) + '\n')
             if event['event'] == 'goal_state' or (event['event'] == 'tool' and ledger is not None):
                 (directory / 'goal_ledger.json').write_text(json.dumps(ledger.context(), indent=2) + '\n')
                 (directory / 'attempt_history.json').write_text(json.dumps(
@@ -889,7 +891,7 @@ def main():
                     json.dumps(episode_context.execution_feedback(), indent=2) + '\n')
             if event['event'] == 'scene_memory':
                 (directory / 'scene_memory.json').write_text(json.dumps(event['memory'], indent=2) + '\n')
-            if event['event'] in ('decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed', 'policy_continuation', 'stage_completion_normalized'):
+            if event['event'] in ('situational_planning', 'situational_decision', 'situational_request_rejected', 'decision', 'tool', 'scheduled_transition', 'transition_blocked', 'subtask_transition', 'plan_replaced', 'planning_window_exhausted', 'recovery_required', 'bounded_execution', 'invalid_decision', 'supervisor_stop_deferred', 'supervisor_stop_retry_limit', 'supervisor_unavailable', 'supervisor_failure_continuation', 'supervisor_request_failed', 'policy_continuation', 'stage_completion_normalized'):
                 history.append(event)
                 print(json.dumps(event), flush=True)
 

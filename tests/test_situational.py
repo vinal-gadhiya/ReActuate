@@ -26,7 +26,20 @@ def context(step=0, horizon=64):
 def action(instruction='Pick the mug from the cabinet.', steps=32, step=0):
     return {'instruction': instruction, 'steps': steps, 'evidence': 'Current labelled image supports this approach.',
             'observation_refs': context(step)['observation_refs'],
-            'perception': {'target': '', 'camera': '', 'mode': 'detect'}}
+            'perception': {'target': '', 'camera': '', 'mode': 'detect'},
+            'task_model': task_model() if step == 0 else None,
+            'scene_updates': [{'id': 'access', 'description': 'Required source contents need inspection.',
+                               'basis': 'unknown', 'observation_refs': context(step)['observation_refs']}] if step == 0 else [],
+            'open_questions': ['Which required items remain in the source compartment?'],
+            'progress_updates': [], 'next_plan': ['Gather remaining required tableware on the counter.'],
+            'plan_rationale': 'Preserve the original task and inspect current access.'}
+
+
+def task_model():
+    return {'success_picture': 'Every required tableware item rests on the named counter.',
+            'requirements': [{'id': 'tableware', 'description': 'Gather all required tableware.',
+                              'success_condition': 'Required items rest on the counter, released.',
+                              'reference_frame': 'Named destination counter; no left/right relation specified.'}]}
 
 
 class Tools:
@@ -72,7 +85,7 @@ class SituationalTests(unittest.TestCase):
             'current:video.robot0_agentview_left': np.zeros((8, 8, 3), dtype=np.uint8)})
         return response, calls
 
-    def test_single_controller_call_without_planning_or_any_verifier(self):
+    def test_initial_planning_and_action_share_one_call_without_any_verifier(self):
         reply, calls = self.supervise(action())
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][2]['schema'], SITUATIONAL_SCHEMA)
@@ -130,7 +143,7 @@ class SituationalTests(unittest.TestCase):
                 validate_situational({**action(), **change}, context())
         with self.assertRaises(ValueError):
             validate_situational(action(), {**context(), 'control_owner': 'patchwam'})
-        validate_situational(action(steps=8, step=32), context(32, 40))
+        validate_situational({**action(steps=8, step=32), 'task_model': task_model()}, context(32, 40))
         validate_situational(action('Pick the mug from the cabinet and place it on the counter.'), context())
 
     def test_can_change_instruction_immediately_without_completion_or_recovery(self):

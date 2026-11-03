@@ -4,6 +4,8 @@ from core.atomic_language import atomic_instruction_grounder, gripper_release_in
 from core.policy_config import validate_policy_interval
 from core.policy_http import RetryableSupervisorError
 from core.scene_memory import PERCEPTION_SCHEMA
+from core.situational_planning import PLANNING_FIELDS, PLANNING_POLICY, validate_planning, update_planning
+from copy import deepcopy
 
 
 SITUATIONAL_SCHEMA = {
@@ -20,19 +22,21 @@ SITUATIONAL_SCHEMA = {
     'required': ['instruction', 'steps', 'evidence', 'observation_refs', 'perception'],
     'additionalProperties': False,
 }
+SITUATIONAL_SCHEMA['properties'] = {**PLANNING_FIELDS, **SITUATIONAL_SCHEMA['properties']}
+SITUATIONAL_SCHEMA['required'] = list(SITUATIONAL_SCHEMA['properties'])
 
 SITUATIONAL_POLICY = '''You guide the frozen Awomo robot policy across ALL RoboCasa
 tasks. Read the original_goal and all labelled current camera views, comparing
 dated before/history images when useful. Choose ONE concise instruction and a
-bounded execution interval. There are no subtasks, boundary detectors, independent
+bounded execution interval. There are no enforced subtask boundaries, independent
 verifiers, completion approvals or committed stages in this experiment. You may
 continue, refine or change instructions at every observation according to the
 actual situation; no recovery declaration or proof of failure is required.
 Only the simulator decides whole-task success and termination. Do not output a
 stop/completion decision or wait for a verifier. Keep working toward every part
 of original_goal, including required relations and exclusions. Your evidence is
-a fallible visual claim, never simulator truth. Briefly preserve relevant progress
-and unresolved original requirements in evidence for subsequent observations.
+a fallible visual claim, never simulator truth. Use the persistent planning_state
+to preserve progress and unresolved original requirements between observations.
 
 Use atomic_instruction_forms and supplied atomic task descriptions for consistent
 action vocabulary and sentence templates, filling slots with observed entity names
@@ -68,6 +72,7 @@ most decision_step_limit; honor policy_step_quantum except the final episode
 remainder. Keep wording stable while it is productive, but change it whenever
 observations suggest a better action. No programs, numerical controls, arbitrary
 coordinates, invented mechanisms or commentary appended to instruction.'''
+SITUATIONAL_POLICY += '\n\n' + PLANNING_POLICY
 
 
 def validate_situational(result, context):
@@ -76,6 +81,7 @@ def validate_situational(result, context):
         raise ValueError('Situational control is an Awomo-only experiment')
     if not isinstance(result, dict) or set(result) != set(SITUATIONAL_SCHEMA['required']):
         raise ValueError('Invalid situational response fields')
+    validate_planning(result, context)
     grounding = atomic_instruction_grounder().validate(result['instruction'])
     steps = result['steps']
     if type(steps) is not int or not 1 <= steps <= context['decision_step_limit']:
@@ -111,14 +117,18 @@ def run_situational(tools, ask, record, *, decision_steps, history, memory,
     """Never replay an old instruction after a failed request or proposal."""
     failures = decisions = 0
     last_instruction = None
+    planning_state = None
     while not tools.done:
         if max_decisions and decisions >= max_decisions:
             return 'decision_budget'
         limit = min(decision_steps, tools.max_steps - tools.steps)
-        feedback = [item for item in history if item['event'] in (
-            'situational_decision', 'situational_request_rejected', 'tool')][-12:]
+        feedback = [{key: item[key] for key in (
+            'event', 'step', 'step_before', 'step_after', 'instruction', 'steps',
+            'evidence', 'observation_refs', 'reason', 'policy_instruction', 'diagnostics') if key in item}
+            for item in history if item['event'] in (
+                'situational_decision', 'situational_request_rejected', 'tool')][-12:]
         context = {'decision_step_limit': limit, 'last_instruction': last_instruction,
-                   'recent_feedback': feedback}
+                   'recent_feedback': feedback, 'planning_state': deepcopy(planning_state)}
         before = tools.steps
         decisions += 1
         try:
@@ -136,6 +146,8 @@ def run_situational(tools, ask, record, *, decision_steps, history, memory,
                 return 'supervisor_failure_limit'
             continue
         failures = 0
+        planning_state = update_planning(result, context)
+        record({'event': 'situational_planning', 'step': before, 'state': planning_state})
         record({'event': 'situational_decision', 'step': before, **result})
         memory.perception = dict(result['perception'])
         tools.run_groot(result['instruction'], result['steps'])

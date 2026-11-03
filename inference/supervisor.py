@@ -470,6 +470,7 @@ class Supervisor:
             # confirmation calls, and the legacy stage-commitment prompt entirely.
             content[0] = {'type': 'input_text', 'text': json.dumps({
                 'context': {**model_context, 'last_instruction': context.get('last_instruction'),
+                            'planning_state': context.get('planning_state'),
                             'recent_feedback': context.get('recent_feedback', [])},
                 'sam': grounding,
                 'atomic_instruction_catalog': task_references(self.instruction_catalog, context),
