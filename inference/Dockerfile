@@ -51,7 +51,7 @@ RUN python /opt/setup/repair_cuda_metadata.py && python -m pip check
 COPY inference/patch_radio_imports.py inference/check_imports.py /opt/setup/
 # Generated Transformers code follows this image's patched source, independently
 # of the persistent model download cache.
-ENV HF_MODULES_CACHE=/tmp/objectworld-hf-modules
+ENV HF_MODULES_CACHE=/tmp/reactuate-hf-modules
 RUN python /opt/setup/patch_radio_imports.py /opt/Isaac-GR00T \
     && python /opt/setup/check_imports.py \
     && python -m pip freeze > /opt/build-info/pip-freeze.txt

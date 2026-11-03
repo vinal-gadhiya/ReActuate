@@ -1,4 +1,4 @@
-# Shared contracts
+# ReActuate shared contracts
 
 Keep shared code independent of MuJoCo, RoboCasa, PyTorch, model SDKs, and
 provider-specific types. It must not import `sim` or `inference`; those components
@@ -7,8 +7,9 @@ may depend on `core`. Avoid a global dependency set or framework before needed.
 `policy_http.py` implements a versioned NumPy transport with no torch or pickle
 dependency. The client retrieves JSON metadata and exchanges NPZ observation and
 action dictionaries using HTTP. NPZ reads disable pickle. Inference responses
-echo request IDs so the simulator can reject stale results. This initial runner
-is synchronous; broader skill/verification schemas below remain planned.
+echo request IDs so the simulator can reject stale results. Execution is
+synchronous at policy chunk boundaries; the plan and verification schemas below
+are implemented by the shared controller contracts.
 
 `agent.py` defines and validates subtask plans, verification decisions, and the
 literal-call command language. `SupervisorClient` exchanges visual observations

@@ -2,7 +2,7 @@
 # docker compose -f compose.yaml -f compose.patchwam.yaml ...
 services:
   inference:
-    image: objectworld-patchwam:latest
+    image: reactuate-patchwam:latest
     build:
       context: .
       dockerfile: inference/Dockerfile.patchwam
@@ -16,4 +16,4 @@ services:
       - huggingface-cache:/cache/huggingface
 volumes:
   patchwam-checkpoints:
-    name: objectworld-patchwam-checkpoints
+    name: ${REACTUATE_PATCHWAM_CHECKPOINT_VOLUME:-reactuate-patchwam-checkpoints}
