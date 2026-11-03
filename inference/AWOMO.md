@@ -1,5 +1,10 @@
 # Awomo-0.5I on the existing harness
 
+On `experiment/awomo-situational`, Awomo agent runs default to the direct
+controller described in [SITUATIONAL.md](SITUATIONAL.md), with atomic vocabulary
+and no independent verifier or stage boundaries. Use `--agent-control staged`
+to reproduce the parent controller described below.
+
 This adds an optional `awomo-0.5i` backend to
 `experiment/2953296-full-access-transfer`. Select `compose.awomo.yaml` instead
 of the PatchWAM overlay on every command. Muse, optional SAM, original goal
@@ -33,7 +38,7 @@ original task instruction; no prior action tail survives an instruction change.
 
 ## Relational instruction experiment
 
-`sim.run_agent` now defaults to `--instruction-mode auto`: Awomo uses relational
+In staged control, `--instruction-mode auto` means Awomo uses relational
 language, while GR00T/PatchWAM retain atomic grounding. `--instruction-mode atomic`
 restores the strict catalog/decomposed-plan setting for an ablation;
 `--instruction-mode relational` explicitly selects the Awomo experiment.
@@ -135,7 +140,7 @@ Run Muse on the same recorded scene:
 
 ```bash
 sudo docker compose -f compose.yaml -f compose.awomo.yaml --profile agent run --rm sim \
-  python -m sim.run_agent --task ArrangeBreadBasket --mode agent \
+  python -m sim.run_agent --task ArrangeBreadBasket --mode agent --agent-control staged \
   --split pretrain --seed 0 --episodes 1 --expected-policy awomo-0.5i \
   --require-unseen-composite --execution-policy episode \
   --action-steps 16 --decision-steps 32 --max-steps 4000 \

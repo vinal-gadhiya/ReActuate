@@ -13,6 +13,7 @@ from core.agent import (DECISION_SCHEMA, parse_program, validate_decision,
                         validate_plan, validate_stage_program,
                         navigation_fixture)
 from core.scene_planning import grounded_plan_schema, normalize_plan_cameras, validate_grounded_plan
+from core.situational import SITUATIONAL_POLICY, SITUATIONAL_SCHEMA, validate_situational
 from core.policy_http import MAX_BYTES, PROTOCOL_VERSION, decode_arrays
 from core.simulator_context import load_atomic_task_catalog
 from inference.meta_api import MetaAPI, MetaAPIError, image_part
@@ -278,6 +279,11 @@ class Supervisor:
         }
 
     def handle(self, operation, context, images):
+        if operation not in ('plan', 'decide', 'act'):
+            raise ValueError('Unknown supervisor operation')
+        if operation == 'act' and (context.get('control_owner') != 'awomo-0.5i'
+                                   or context.get('instruction_mode') != 'atomic'):
+            raise ValueError('Situational control requires Awomo with atomic instruction vocabulary')
         remaining = context.get('api_calls_left', 0)
         if type(remaining) is not int or not 1 <= remaining <= 200:
             raise ValueError('API call budget exhausted or invalid')
@@ -417,7 +423,7 @@ class Supervisor:
                             'sam': None, 'boundary_review': boundary_review,
                             'completion_confirmation': completion_confirmation,
                             'received_image_diagnostics': diagnostics, 'validation_error': None}
-        if use_sam and operation == 'decide' and remaining - len(audit) >= 2:
+        if use_sam and operation in ('decide', 'act') and remaining - len(audit) >= 2:
             query = context.get('perception_query') or {}
             key = query.get('camera') or next(key for key in sorted(images) if key.startswith('current:'))
             if not key.startswith('current:') and f'current:{key}' in images:
@@ -425,7 +431,7 @@ class Supervisor:
             if key not in images or not key.startswith('current:'):
                 raise ValueError('Perception camera must identify a current snapshot')
             frame = images[key]
-            target = query.get('target') or context['step']['target']
+            target = query.get('target') or (context.get('step') or {}).get('target') or context['original_goal']
             clip = clips.get(key[len('current:'):])
             if clip is not None and len(context.get('clip_steps', [])) != len(clip):
                 raise ValueError('Clip samples must have matching simulator-step labels')
@@ -459,6 +465,30 @@ class Supervisor:
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
+        if operation == 'act':
+            # A separate action contract avoids stage completion, recovery gates,
+            # confirmation calls, and the legacy stage-commitment prompt entirely.
+            content[0] = {'type': 'input_text', 'text': json.dumps({
+                'context': {**model_context, 'last_instruction': context.get('last_instruction'),
+                            'recent_feedback': context.get('recent_feedback', [])},
+                'sam': grounding,
+                'atomic_instruction_catalog': task_references(self.instruction_catalog, context),
+                'atomic_instruction_forms': self.instruction_grounder.forms,
+                'policy_language_extensions': [{**RELEASE_EXTENSION,
+                    'meaning': 'A short frozen-policy language request. Muse judges low-height destination alignment; no independent verifier.'}],
+            })}
+            result, usage = api_response(self.model, content, instructions=SITUATIONAL_POLICY,
+                                         schema=SITUATIONAL_SCHEMA)
+            audit.append({**usage, 'role': 'situational_controller'})
+            validation_error = None
+            try:
+                validate_situational(result, context)
+            except (ValueError, KeyError, TypeError) as error:
+                validation_error = str(error)
+            return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
+                    'boundary_review': None, 'completion_confirmation': None,
+                    'release_confirmation': None, 'received_image_diagnostics': diagnostics,
+                    'validation_error': validation_error}
         prompt = instruction_policy(SUPERVISOR_POLICY, language_grounder) + '\nOperation: ' + operation + '. Backend: ' + context.get('control_owner', 'gr00t') + '.'
         current_cameras = {key for key in images if key.startswith('current:')}
         schema = grounded_plan_schema(current_cameras) if operation == 'plan' else DECISION_SCHEMA
@@ -588,11 +618,11 @@ def make_handler(supervisor):
                                    'single_stage_instructions', 'conditional_access', 'scene_grounded_planning',
                                    'persistent_goal_ledger', 'goal_attempt_history', 'universal_outcomes',
                                    'rolling_action_windows', 'compact_working_context',
-                                   'temporal_snapshots', 'independent_boundary_review'],
+                                   'temporal_snapshots', 'independent_boundary_review', 'awomo_situational_control'],
             })
 
         def do_POST(self):
-            if self.path not in ('/plan', '/decide'):
+            if self.path not in ('/plan', '/decide', '/act'):
                 self.reply(404, {'error': 'unknown endpoint'})
                 return
             try:

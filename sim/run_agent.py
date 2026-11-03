@@ -23,6 +23,7 @@ from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import gripper_release_instruction
 from core.relational_language import instruction_grounder as select_instruction_grounder
+from core.situational import run_situational
 from core.execution import completed_stage_decision, validate_stage_switch, supervision_budget
 from core.boundary_review import temporal_snapshots
 from copy import deepcopy
@@ -720,6 +721,8 @@ def main():
                         help='Fail before motion if inference metadata identifies a different backend')
     parser.add_argument('--instruction-mode', choices=('auto', 'atomic', 'relational'), default='auto',
                         help='Auto: relational references for Awomo, atomic wording for other backends')
+    parser.add_argument('--agent-control', choices=('auto', 'situational', 'staged'), default='auto',
+                        help='This branch: auto uses direct situational control for Awomo agents; staged retains the parent controller')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--seed', type=int, default=0)
@@ -821,6 +824,19 @@ def main():
     if metadata.get('data_config') != 'panda_omron' or metadata.get('embodiment') != 'PandaOmron':
         raise ValueError('A PandaOmron policy is required')
     args.action_steps = resolve_policy_execution(metadata, args.action_steps, args.expected_policy)
+    situational = (args.mode == 'agent' and (args.agent_control == 'situational'
+                   or (args.agent_control == 'auto' and policy_family(metadata) == 'awomo-0.5i')))
+    if args.agent_control == 'situational' and (args.mode != 'agent' or policy_family(metadata) != 'awomo-0.5i'):
+        parser.error('Situational control requires --mode agent with the Awomo backend')
+    args.agent_control = 'situational' if situational else 'staged'
+    if situational:
+        if args.plan is not None or args.plan_only:
+            parser.error('Situational control has no stage plan; omit --plan and --plan-only')
+        if args.instruction_mode == 'relational':
+            parser.error('Situational control uses atomic task vocabulary; use --instruction-mode atomic or auto')
+        args.instruction_mode = 'atomic'
+        args.boundary_review = False
+        args.execution_policy = 'episode'
     language_grounder = select_instruction_grounder(policy_family(metadata), args.instruction_mode)
     args.instruction_mode = language_grounder.mode
     if metadata.get('required_action_steps'):
@@ -918,10 +934,10 @@ def main():
                 if ledger is not None:
                     ledger.observe(tools.steps, current)
                 images = dict(current)
-                if previous_images is not None and operation == 'decide':
+                if previous_images is not None and operation in ('decide', 'act'):
                     images.update({key.replace('current:', 'before:', 1): frame for key, frame in previous_images.items()})
                 temporal_mapping = []
-                if operation == 'decide':
+                if operation in ('decide', 'act'):
                     temporal_images, temporal_mapping = temporal_snapshots(
                         tools.frames, tools.steps, previous_observation_step, camera_keys)
                     images.update(temporal_images)
@@ -938,11 +954,11 @@ def main():
                     current_depth, depth_metres, depth_context = supervisor_depth_views(
                         tools.observation, camera_keys, near, far, args.depth_max_metres)
                     images.update(current_depth)
-                    if previous_depth_images is not None and operation == 'decide':
+                    if previous_depth_images is not None and operation in ('decide', 'act'):
                         images.update({key.replace('current_depth:', 'before_depth:', 1): frame
                                        for key, frame in previous_depth_images.items()})
                     depth_context.update(observation_step=tools.steps,
-                                         before_observation_step=previous_observation_step if operation == 'decide' else None)
+                                         before_observation_step=previous_observation_step if operation in ('decide', 'act') else None)
                     np.savez_compressed(directory / f'depth-{request_number:03d}.npz', **depth_metres)
                 clip_steps, clips = tools.perception_clip()
                 # Clips are supplied only when SAM is enabled, not to the policy.
@@ -960,7 +976,8 @@ def main():
                     clip_file = f'perception-{request_number:03d}.npz'
                     np.savez_compressed(directory / clip_file, **clips, steps=np.asarray(clip_steps))
                     references.append({'label': 'temporal camera samples', 'path': clip_file})
-                decisions_used = sum(item['event'] in ('decision', 'invalid_decision', 'supervisor_unavailable') for item in history)
+                decisions_used = sum(item['event'] in ('decision', 'invalid_decision', 'supervisor_unavailable',
+                                                       'situational_decision', 'situational_request_rejected') for item in history)
                 # Per-request allowance, refreshed when no episode-wide cap is
                 # configured. It is NOT a 200-call episode cap.
                 decisions_left, calls_left, motion_bound = supervision_budget(
@@ -985,12 +1002,12 @@ def main():
                     'scene_assessment_source': scene_assessment_source,
                     'execution_feedback': episode_context.execution_feedback(),
                     'observation_step': tools.steps, 'request_number': request_number,
-                    'before_observation_step': previous_observation_step if operation == 'decide' else None,
+                    'before_observation_step': previous_observation_step if operation in ('decide', 'act') else None,
                     'boundary_review_enabled': args.boundary_review,
                     'temporal_observations': temporal_mapping,
                     'observation_refs': [{'step': tools.steps, 'camera': key} for key in current] + (
                         [{'step': previous_observation_step, 'camera': key} for key in previous_images]
-                        if previous_images is not None and operation == 'decide' else []) + [
+                        if previous_images is not None and operation in ('decide', 'act') else []) + [
                             {'step': item['step'], 'camera': item['camera']} for item in temporal_mapping],
                     'clip_steps': clip_steps,
                     'navigation_bursts_left': (None if args.max_navigation_bursts is None else
@@ -1015,7 +1032,8 @@ def main():
                     'image_diagnostics': quality, 'sam_video_enabled': args.sam_video,
                     'subtask_budget_mode': 'episode' if args.execution_policy == 'episode' else args.subtask_budget_mode,
                     'supervisor_stop_policy': args.supervisor_stop_policy,
-                    'instruction_style': 'single_stage',
+                    'instruction_style': 'situational' if situational else 'single_stage',
+                    'agent_control': args.agent_control,
                     'max_stop_continuations': args.max_stop_continuations,
                     'control_owner': policy_family(metadata),
                     'release_step_limit': min(args.action_steps, context.get('decision_step_limit', args.action_steps)),
@@ -1095,6 +1113,10 @@ def main():
                 if args.mode == 'baseline':
                     plan = [{'id': 'original', 'instruction': goal, 'target': 'task objects',
                              'success_criteria': 'Complete the original task', 'max_steps': max_steps}]
+                elif situational:
+                    # No initial planning call, execution window or stage ledger.
+                    # The unchanged original_goal accompanies every observation.
+                    plan = []
                 elif starting_plan is not None and (args.mode != 'agent' or starting_requirements is not None):
                     plan = [dict(step) for step in starting_plan]
                     initial_scene_assessment = starting_scene_assessment
@@ -1113,7 +1135,7 @@ def main():
                         'scene_assessment': initial_scene_assessment,
                         'scene_assessment_source': scene_assessment_source})
                 saved_plan = {'steps': plan}
-                if args.mode == 'agent':
+                if args.mode == 'agent' and not situational:
                     requirements = starting_requirements if starting_requirements is not None else generated.get('requirements')
                     if requirements is None:
                         raise ValueError('Initial agent planning must extract persistent original requirements')
@@ -1143,7 +1165,11 @@ def main():
                         'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper},
                     })
 
-                reason = 'plan_only' if args.plan_only else run_subtasks(
+                reason = run_situational(
+                    tools, ask, record, decision_steps=args.decision_steps,
+                    history=history, memory=memory, max_failures=args.max_supervisor_failures,
+                    max_decisions=args.max_decisions,
+                ) if situational else 'plan_only' if args.plan_only else run_subtasks(
                     tools, plan, args.mode, decide, record,
                     args.decision_steps, args.max_decisions, args.max_replans,
                     args.subtask_budget_mode,
@@ -1178,8 +1204,9 @@ def main():
                     'supervisor_stop_policy': args.supervisor_stop_policy,
                     'max_supervisor_failures': args.max_supervisor_failures,
                     'planning_context': args.planning_context,
-                    'instruction_style': 'single_stage' if args.mode == 'agent' else 'original_or_fixed',
+                    'instruction_style': ('situational' if situational else 'single_stage') if args.mode == 'agent' else 'original_or_fixed',
                     'instruction_mode': args.instruction_mode,
+                    'agent_control': args.agent_control,
                     'max_stop_continuations': args.max_stop_continuations,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'benchmark_membership': simulator_context['task']['benchmark_membership'],
@@ -1201,6 +1228,7 @@ def main():
                 env.close()
     summary = {
         'task': args.task, 'mode': args.mode, 'episodes': len(results),
+        'agent_control': args.agent_control,
         'execution_policy': args.execution_policy, 'executed_steps': sum(item['steps'] for item in results),
         'successes': sum(item['success'] for item in results),
         'success_rate': sum(item['success'] for item in results) / len(results),

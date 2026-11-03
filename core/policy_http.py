@@ -77,7 +77,7 @@ class PolicyClient:
 
 class SupervisorClient(PolicyClient):
     def ask(self, operation, context, images):
-        if operation not in ('plan', 'decide'):
+        if operation not in ('plan', 'decide', 'act'):
             raise ValueError('Unknown supervisor operation')
         payload = dict(images)
         payload['__context'] = np.asarray(json.dumps(context))
