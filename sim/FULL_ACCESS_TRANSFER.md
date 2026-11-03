@@ -77,3 +77,16 @@ schema, including opening-panel confirmation. If no complete response arrives,
 the runner retries supervision without robot motion and reports a structured
 failure when its configured failure allowance is exhausted. Partial JSON is
 never treated as a decision. Rebuild both sim and supervisor for this fix.
+
+Placement handoff is now strict: a placement or complete transfer cannot advance
+until destination support, release from the gripper, and a clearly withdrawn
+gripper are ALL separately observed with current camera evidence. Near-destination
+overlap, open fingers alone, continued contact/holding or ambiguous/occluded
+clearance cannot confirm completion. No metric or pixel-distance threshold is
+invented. The object must remain at the destination while the gripper withdraws.
+These structured conditions supplement the existing independent confirmation;
+they do not add API calls. A simultaneous supported-grasp/completed-placement
+claim is rejected. Rejected confirmations assert uncertainty, not object loss.
+This applies across supported policy backends and to older placement criteria.
+Models can still misread images; these checks validate the evidence contract,
+not hidden simulator contact truth. Rebuild sim and supervisor for the schema.

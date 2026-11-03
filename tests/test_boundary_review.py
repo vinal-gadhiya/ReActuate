@@ -34,6 +34,14 @@ def opening_confirmation(states=('open', 'open'), configuration='paired', verdic
     return result
 
 
+def placement_confirmation(statuses=('observed', 'observed', 'observed'), verdict='confirmed'):
+    result = confirmation(verdict)
+    result['placement'] = {key: {'status': status, 'evidence': 'Current useful view establishes this condition.',
+                                'observation_refs': assessment()['observation_refs']}
+                           for key, status in zip(('destination_support', 'object_released', 'gripper_clear'), statuses)}
+    return result
+
+
 class BoundaryReviewTests(unittest.TestCase):
     def context(self, budget=3):
         active = step('a', 'Pick up the mug.')
@@ -81,7 +89,9 @@ class BoundaryReviewTests(unittest.TestCase):
                 def response(self, model, content, **kwargs):
                     calls.append((content, kwargs))
                     if len(calls) == 2:
-                        return (opening_confirmation() if instruction.startswith('Open ') else confirmation()), {'model': model}
+                        verified = (opening_confirmation() if instruction.startswith('Open ') else
+                                    placement_confirmation() if instruction.startswith('Place ') else confirmation())
+                        return verified, {'model': model}
                     return {'assessment': assessment()}, {'model': model}
 
             context = self.context()

@@ -31,11 +31,66 @@ OPENING_CONFIRMATION_SCHEMA = record_schema({
         })},
     }),
 })
+PLACEMENT_CONDITION_SCHEMA = record_schema({
+    'status': {'type': 'string', 'enum': ['observed', 'contradicted', 'unknown']},
+    'evidence': {'type': 'string'},
+    'observation_refs': ASSESSMENT_SCHEMA['properties']['observation_refs'],
+})
+PLACEMENT_CONFIRMATION_SCHEMA = record_schema({
+    **deepcopy(CONFIRMATION_SCHEMA['properties']),
+    'placement': record_schema({key: deepcopy(PLACEMENT_CONDITION_SCHEMA) for key in
+                              ('destination_support', 'object_released', 'gripper_clear')}),
+})
 
 
 def opening_stage(context):
     return bool(re.match(r'^\s*(?:fully\s+)?open\b',
                          (context.get('step') or {}).get('instruction', ''), re.IGNORECASE))
+
+
+def placement_stage(context):
+    instruction = (context.get('step') or {}).get('instruction', '')
+    if re.match(r'^\s*(?:place|put)\b|^\s*(?:pick|move|transfer)\b.*\b(?:place|put)\b', instruction, re.IGNORECASE):
+        return True
+    # Full official descriptions may express placement with other vocabulary.
+    # Retrieve their public category; do not branch on task or object names.
+    from core.atomic_language import atomic_instruction_grounder
+    grounder = atomic_instruction_grounder()
+    try:
+        matched = grounder.validate(instruction)
+    except ValueError:
+        return False
+    task = grounder.tasks.get(matched['form'], {})
+    return task.get('category', '').casefold() == 'pick and place'
+
+
+def confirmation_schema(context):
+    if opening_stage(context):
+        return OPENING_CONFIRMATION_SCHEMA
+    return PLACEMENT_CONFIRMATION_SCHEMA if placement_stage(context) else CONFIRMATION_SCHEMA
+
+
+PLACEMENT_POLICY = '''STRICT PLACEMENT HANDOFF: Before completing any placement or
+full pick-and-place stage, independently establish ALL THREE conditions:
+destination_support: the intended object rests stably on/in the required
+destination, supported by it rather than by the fingers;
+object_released: the object is no longer enclosed, pinched, carried or supported
+by the gripper; gripper opening alone is not proof;
+gripper_clear: the gripper has withdrawn clearly away from the object, with an
+unambiguous visible gap and no contact/enclosure or immediate hovering around it.
+The object must remain at the destination as the gripper withdraws. An object
+still held, lowered toward the destination or almost touching it is incomplete.
+Report these separately in placement, each with current dated camera evidence.
+Use temporal evidence to distinguish a resting object from one moving with the
+fingers. Reconcile all useful cameras; an occluded wrist view does not establish
+release, and image overlap does not establish support. If the fingers/object gap,
+release or support is hidden or ambiguous, mark that condition unknown and DO NOT
+confirm or authorize the next stage. Do not invent a metric or pixel distance,
+use SAM masks/proximity as contact truth, or require every camera to see the gap.
+This strict handoff applies even when an older success_criteria only says placed.
+Return incomplete for visible continued holding/contact and uncertain for
+insufficient evidence. Keep evidence brief. These are fallible visual claims,
+not simulator contact labels or a manual command to release or move the arm.'''
 
 
 OPENING_POLICY = '''For an opening stage, inventory ALL doors/panels of the named
@@ -78,6 +133,10 @@ overlap. For navigation, check arrival rather than destination visibility alone.
 For a complete pick-and-place instruction, require both final destination
 support/containment and release, checked separately. An object still held or
 moving toward its destination is partial progress, not a completed transfer.
+For placement handoff also require the gripper clearly withdrawn from the object,
+with visible separation while the object stays supported at its destination.
+If still touching, enclosing, immediately hovering around the object, or occluded
+so separation cannot be established, do not confirm placement.
 For all other actions, require the intended physical effect, not approach/motion.
 Use the relevant camera views, not majority voting. Historical frames establish
 change, but each confirmed condition needs current evidence. Respect the stage
@@ -103,6 +162,13 @@ closing alone do not establish a grasp. Do not demand that acquisition also
 complete transport to the final destination. Respect explicit stage requirements.
 For a complete pick-and-place instruction, acquisition and arrival alone are
 partial progress; require final placement on/in the destination and release.
+For placement or a full transfer, also require the gripper visibly withdrawn
+clearly away from the object while it remains supported at the destination.
+Near-destination overlap, open fingers, or apparent support while still held is
+insufficient. Continued holding/contact is unsatisfied; ambiguous separation is
+unknown. Do not advance from either state. Use all relevant views and temporal
+retention evidence without inventing distance thresholds or demanding all views
+show the gap. This stricter handoff applies to old placement criteria as well.
 For other actions compare the relevant changed state: access clearance, support
 or containment after placement, destination arrival, or the intended physical
 effect of operating an appliance, pouring, washing or manipulating an object.
@@ -174,7 +240,7 @@ def boundary_completion(assessment):
 
 
 def validate_confirmation(result, context):
-    schema = OPENING_CONFIRMATION_SCHEMA if opening_stage(context) else CONFIRMATION_SCHEMA
+    schema = confirmation_schema(context)
     if not isinstance(result, dict) or set(result) != set(schema['properties']):
         raise ValueError('Invalid stage confirmation fields')
     if result['verdict'] not in ('confirmed', 'incomplete', 'uncertain'):
@@ -193,6 +259,18 @@ def validate_confirmation(result, context):
             'evidence': check['evidence'], 'observation_refs': check['observation_refs']}}, context)
     if result['verdict'] == 'confirmed' and any(check['status'] != 'observed' for check in checks):
         raise ValueError('Cannot confirm with an unknown or contradicted physical condition')
+    if placement_stage(context) and not opening_stage(context):
+        placement = result['placement']
+        if not isinstance(placement, dict) or set(placement) != set(PLACEMENT_CONFIRMATION_SCHEMA['properties']['placement']['properties']):
+            raise ValueError('Placement needs separate support, release and gripper-clear evidence')
+        for condition in placement.values():
+            if (not isinstance(condition, dict) or set(condition) != {'status', 'evidence', 'observation_refs'}
+                    or condition['status'] not in ('observed', 'contradicted', 'unknown')):
+                raise ValueError('Invalid placement condition')
+            validate_boundary_review({'assessment': {'outcome': 'unknown', 'transport': None,
+                'evidence': condition['evidence'], 'observation_refs': condition['observation_refs']}}, context)
+        if result['verdict'] == 'confirmed' and any(condition['status'] != 'observed' for condition in placement.values()):
+            raise ValueError('Placement cannot complete until support, release and gripper clearance are all observed')
     if opening_stage(context):
         opening = result['opening']
         if not isinstance(opening, dict) or set(opening) != {'configuration', 'panels'}:
@@ -226,5 +304,6 @@ def unconfirmed_boundary(assessment, evidence):
     result = boundary_completion(assessment)
     result.update(status='inspect', evidence=evidence)
     result['assessment']['outcome'] = 'unknown'
+    result['assessment']['transport'] = None
     result['assessment']['evidence'] = evidence
     return result

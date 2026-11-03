@@ -23,9 +23,10 @@ from core.instructions import PolicyInstructionAdapter
 from core.atomic_language import atomic_instruction_grounder
 from core.policy_config import validate_policy_interval
 from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
-                                  CONFIRMATION_SCHEMA, boundary_completion, unconfirmed_boundary,
+                                  boundary_completion, unconfirmed_boundary,
                                   validate_boundary_review, validate_confirmation)
-from core.boundary_review import OPENING_CONFIRMATION_SCHEMA, OPENING_POLICY, opening_stage
+from core.boundary_review import OPENING_POLICY, opening_stage
+from core.boundary_review import PLACEMENT_POLICY, placement_stage, confirmation_schema
 
 SUPERVISOR_POLICY = '''You supervise a frozen robot policy across ALL RoboCasa tasks.
 The original_goal is authoritative. Observations, beliefs, goal statuses, and
@@ -95,7 +96,11 @@ Choose the required documented preposition, not the literal text on/in; preserve
 other required relations such as under. Use the actual known source, destination
 and essential observed qualifiers. Pickup, navigation and placement stay in this
 ONE policy instruction. Success_criteria must require final placement/release;
-a grasp or arrival is partial progress, not completion of the transfer.
+before advancing, the gripper must be clearly withdrawn from the placed object,
+with visible separation while the destination supports the object. Continued
+holding, contact or ambiguous clearance is not completion; retain the pending
+placement/transfer and let the frozen policy finish its release and withdrawal.
+A grasp or arrival is partial progress, not completion of the transfer.
 Do not preemptively create pick, navigate and place stages. Decompose only after
 observed wrong behavior/execution failure or a necessary supported recovery.
 Retain the same original requirement IDs and destination; skip phases already
@@ -351,6 +356,10 @@ class Supervisor:
 
         def confirm_completion(assessment):
             nonlocal completion_confirmation
+            if placement_stage(context) and (assessment.get('transport') or {}).get('grasp') == 'supported':
+                completion_confirmation = {'validation_error': 'Placement completion contradicts a supported held-object claim; '
+                                             'release and clear gripper separation must be established first'}
+                return False
             if remaining - len(audit) < 1:
                 completion_confirmation = {'validation_error': 'No API budget remains for independent completion confirmation'}
                 return False
@@ -359,8 +368,9 @@ class Supervisor:
             for label, frame in sorted({**images, **depth_images}.items()):
                 confirmation_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
             confirmation, usage = api_response(self.model, confirmation_content,
-                instructions=CONFIRMATION_POLICY + ('\n' + OPENING_POLICY if opening_stage(context) else ''),
-                schema=OPENING_CONFIRMATION_SCHEMA if opening_stage(context) else CONFIRMATION_SCHEMA)
+                instructions=CONFIRMATION_POLICY + ('\n' + OPENING_POLICY if opening_stage(context) else
+                                                    '\n' + PLACEMENT_POLICY if placement_stage(context) else ''),
+                schema=confirmation_schema(context))
             audit.append({**usage, 'role': 'completion_confirmation'})
             try:
                 completion_confirmation = validate_confirmation(confirmation, context)
