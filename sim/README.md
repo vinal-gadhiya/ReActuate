@@ -40,9 +40,14 @@ and SAM provide planning, visual memory, verification, and language corrections.
 Destination visibility does not automatically shorten a policy execution burst.
 Agent policy instructions use atomic-catalog vocabulary and formats, with exactly
 one tool call per decision and observation before the next stage. New pick-and-place
-objectives first use a complete source-to-destination transfer instruction;
-only observed wrong execution or justified recovery permits decomposition into
-pick, navigate and place. Final placement/release is required for completion.
+objectives use separate pick and place stages from the start, with navigation
+only when travel is necessary. Final support, release and clear gripper withdrawal
+are required for placement completion. Awomo's `--instruction-mode auto` selects
+relational language with observed spatial anchors and optional combined transfers;
+`--instruction-mode atomic` restores strict catalog wording and decomposed plans.
+A short literal `Open the gripper.` policy
+request is available only as a separately verified low-height release intervention
+within the pending placement; it is not a numeric control override.
 For paired-door fixtures both doors must be open, with per-panel confirmation;
 single-door fixtures and drawers do not require invented partners. See
 [this branch's experiment notes](FULL_ACCESS_TRANSFER.md). Access/opening

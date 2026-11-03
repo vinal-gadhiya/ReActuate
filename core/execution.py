@@ -6,7 +6,7 @@ from core.goals import normalized
 
 
 SWITCH_REASONS = {'blocked_access', 'wrong_target', 'object_loss', 'unsafe_state',
-                  'goal_contradiction', 'useful_required_object_held', 'execution_failure'}
+                  'goal_contradiction', 'useful_required_object_held', 'execution_failure', 'controlled_release', 'reference_refinement'}
 
 
 def supervision_budget(max_decisions, max_api_calls, decisions_used, api_calls_used,
@@ -53,10 +53,18 @@ def completed_stage_decision(decision, current_step, ledger=None):
     return result
 
 
-def validate_stage_switch(committed, proposed, decision, current_step, ledger=None):
+def validate_stage_switch(committed, proposed, decision, current_step, ledger=None, allow_refinement=False):
     if normalized(committed) == normalized(proposed):
         return
+    from core.atomic_language import gripper_release_instruction
+    from core.boundary_review import placement_stage
+    if gripper_release_instruction(proposed):
+        if (not placement_stage({'step': {'instruction': committed}})
+                or (decision.get('assessment', {}).get('transport') or {}).get('grasp') != 'supported'):
+            raise ValueError('Controlled release requires pending placement and a supported held-object claim')
     recovery = decision.get('recovery')
+    if isinstance(recovery, dict) and recovery.get('necessity') == 'reference_refinement' and not allow_refinement:
+        raise ValueError('Reference refinement is available only in relational instruction mode')
     if (not isinstance(recovery, dict) or recovery.get('necessity') not in SWITCH_REASONS
             or not isinstance(recovery.get('description'), str) or not recovery['description'].strip()):
         raise ValueError('Active stage is not verified complete. A different instruction requires current '

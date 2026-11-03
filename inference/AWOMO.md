@@ -31,6 +31,37 @@ instruction to Muse's latest explicit instruction, keeping visual history. Model
 weights, preprocessing and sampling stay unchanged. Baseline runs keep the
 original task instruction; no prior action tail survives an instruction change.
 
+## Relational instruction experiment
+
+`sim.run_agent` now defaults to `--instruction-mode auto`: Awomo uses relational
+language, while GR00T/PatchWAM retain atomic grounding. `--instruction-mode atomic`
+restores the strict catalog/decomposed-plan setting for an ablation;
+`--instruction-mode relational` explicitly selects the Awomo experiment.
+
+Muse can use observed appearance and spatial anchors in basic action sentences,
+for example `Place the mug near the brown mug.` or `Take the mug from the cabinet
+beside the sink and place it beside the brown mug.` These are illustrations,
+not claims about a scene. Muse must identify the target/reference/destination
+from supplied observations, preserve original goal constraints and clarify
+ambiguous camera-relative left/right. An anchor object is not automatically the
+support surface. Combined transfers are allowed in this mode when helpful;
+one executable tool call per decision still applies. Instructions pass through
+verbatim. Non-catalog frames are logged as a harness language experiment, not
+upstream training annotations.
+
+Current evidence-backed `reference_refinement` may clarify the same pending
+object/destination without claiming execution failure. It is restricted to
+relational mode. Original requirements, per-panel opening confirmation, low-height
+release permits, strict release/gripper-clear completion, and Awomo's 16-step
+cadence remain enforced. Arbitrary action chains and hand-release synonyms are
+not accepted. `Open the gripper.` still requires the separate release gate.
+
+After committing/pushing, rebuild sim/supervisor and rerun their tests using the
+commands below. Add `--instruction-mode relational` to the Muse rollout command,
+or use `--instruction-mode atomic` on the same scene/seed for the comparison.
+Language flexibility is an experiment; mock contract checks do not establish
+improved grounding or task success.
+
 The model requires 16-step action chunks. Use `--action-steps 16` and
 `--decision-steps 32` (the Awomo default), or another multiple of 16 up to 80.
 Generated intervals that violate the cadence are rejected before motion. The

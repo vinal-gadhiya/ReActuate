@@ -13,14 +13,15 @@ This experiment changes two shared behaviors across tasks:
   closed, partly open, unknown or stale partner is rejected before stage advance.
   A single-door fixture needs its one door; a named drawer needs that drawer
   fully open. Unrelated fixtures, drawers and freezer compartments are excluded.
-- New pick-and-place work first uses one complete source-to-destination atomic
-  instruction, such as `Pick the mug from the counter and place it on the tray.`
-  Navigation stays inside that policy request. Final placement/release completes
-  the stage; acquisition or arrival alone does not. Only observed wrong behavior
-  or a necessary evidence-backed recovery permits decomposition into pick,
-  navigate and place. Retain original requirement IDs and destination, and skip
-  phases already achieved. The new generic `execution_failure` intervention reason
-  allows a supported strategy change without inventing an obstruction or loss.
+- New pick-and-place work is decomposed from the start: pick from an observed
+  source, navigate only when actual travel is required, and place at the original
+  destination. Helper stages retain the final requirement IDs; acquisition alone
+  does not satisfy final placement. Skip phases already achieved. Generated plans
+  with combined pick-and-place stages are rejected in atomic instruction mode;
+  explicitly supplied older full-transfer instructions remain supported.
+  Awomo now defaults to relational instruction mode, which permits a concise
+  combined transfer when observed references make it useful. See
+  [Awomo's language experiment](../inference/AWOMO.md#relational-instruction-experiment).
 
 Source-to-destination forms with `on`, `in` and `under` are derived from the
 existing cited atomic descriptions, with source/destination entity substitutions.
@@ -90,3 +91,24 @@ claim is rejected. Rejected confirmations assert uncertainty, not object loss.
 This applies across supported policy backends and to older placement criteria.
 Models can still misread images; these checks validate the evidence contract,
 not hidden simulator contact truth. Rebuild sim and supervisor for the schema.
+
+## Verified policy-language release
+
+The operator-requested `Open the gripper.` extension is a literal request through
+`run_groot` to the frozen policy, with separately identified harness provenance.
+It is not presented as upstream training wording, and no action values or forced
+gripper controls are injected. It is only a temporary `controlled_release`
+intervention inside a pending placement, not a standalone planned stage.
+
+An independent review must currently observe the intended held object, correct
+destination alignment, and low release height (already supported or very close
+to the intended support). Unknown identity, obscured height, edge/rim alignment,
+or a high drop blocks the request. No invented distance threshold is used. This
+review runs even if normal boundary review is disabled and needs available API
+allowance. Authorization is bound to the exact stage, current step and program,
+expires on the next supervisor request, and permits at most one policy chunk.
+Awomo's 16-step cadence still applies. Direct/offline unverified release requests
+are rejected by the runner. After release, placement remains pending until the
+usual support/release/gripper-clear checks pass. The frozen policy may still fail
+to obey the language request; assess the resulting images rather than assuming
+the request caused release.

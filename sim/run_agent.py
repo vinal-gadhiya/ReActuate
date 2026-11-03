@@ -21,7 +21,8 @@ from core.simulator_context import build_simulator_context, load_operator_contex
 from core.scene_memory import SceneMemory
 from core.goals import GoalLedger, AttemptHistory
 from core.instructions import PolicyInstructionAdapter
-from core.atomic_language import atomic_instruction_grounder
+from core.atomic_language import gripper_release_instruction
+from core.relational_language import instruction_grounder as select_instruction_grounder
 from core.execution import completed_stage_decision, validate_stage_switch, supervision_budget
 from core.boundary_review import temporal_snapshots
 from copy import deepcopy
@@ -228,10 +229,12 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                  placement_burst_steps=8, supervisor_stop_policy='halt', max_supervisor_failures=3,
                  concise_instructions=False, max_stop_continuations=None,
                  goal_ledger=None, attempt_history=None, instruction_adapter=None, instruction_grounder=None,
-                 execution_policy='bounded'):
+                 execution_policy='bounded', release_authorizer=None):
     if execution_policy not in ('bounded', 'episode'):
         raise ValueError('Unknown execution policy')
     persistent = mode == 'agent' and execution_policy == 'episode'
+    if any(gripper_release_instruction(stage['instruction']) for stage in plan):
+        raise ValueError('Gripper release must be a verified temporary placement intervention, not a planned stage')
     if supervisor_stop_policy not in ('halt', 'continue'):
         raise ValueError('Unknown supervisor stop policy')
     if max_supervisor_failures < 0:
@@ -377,6 +380,16 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                             decision = completed
                     validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
                                       getattr(tools, 'allow_vertical', False))
+                    if decision['status'] == 'continue':
+                        for name, arguments in parse_program(decision['program'], min(decision_steps, remaining)):
+                            if name == 'run_groot' and gripper_release_instruction(arguments['instruction']):
+                                if (arguments['steps'] > getattr(tools, 'chunk_steps', decision_steps)
+                                        or release_authorizer is None
+                                        or not release_authorizer(decision, tools.steps, step)):
+                                    raise ValueError('Open the gripper requires a fresh verified low-height release permit')
+                    elif decision['status'] == 'replan' and any(
+                            gripper_release_instruction(stage['instruction']) for stage in decision['replacement_steps']):
+                        raise ValueError('Keep release as a verified temporary intervention within the pending placement')
                     if instruction_grounder is not None:
                         if decision['status'] == 'replan':
                             instruction_grounder.validate_generated_plan(
@@ -390,10 +403,12 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                         if decision['status'] == 'continue':
                             for name, arguments in parse_program(decision['program'], min(decision_steps, remaining)):
                                 proposed = arguments['instruction'] if name == 'run_groot' else f'Navigate to the {arguments["fixture"]}.'
-                                validate_stage_switch(step['instruction'], proposed, decision, tools.steps, ledger)
+                                validate_stage_switch(step['instruction'], proposed, decision, tools.steps, ledger,
+                                                      allow_refinement=getattr(instruction_grounder, 'mode', 'atomic') == 'relational')
                         elif decision['status'] == 'replan' and spent > 0 and not window_exhausted:
                             validate_stage_switch(step['instruction'], decision['replacement_steps'][0]['instruction'],
-                                                  decision, tools.steps, ledger)
+                                                  decision, tools.steps, ledger,
+                                                  allow_refinement=getattr(instruction_grounder, 'mode', 'atomic') == 'relational')
                     if ledger is not None:
                         if 'outcome' not in decision['assessment']:
                             raise ValueError('Ledger mode requires a universal outcome assessment')
@@ -702,6 +717,8 @@ def main():
                         help='Timeout per policy prediction, independent of episode step budget')
     parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam', 'awomo-0.5i'), default=os.environ.get('EXPECTED_POLICY'),
                         help='Fail before motion if inference metadata identifies a different backend')
+    parser.add_argument('--instruction-mode', choices=('auto', 'atomic', 'relational'), default='auto',
+                        help='Auto: relational references for Awomo, atomic wording for other backends')
     parser.add_argument('--supervisor-url', default='http://supervisor:8001')
     parser.add_argument('--split', choices=('pretrain', 'target'), default='pretrain')
     parser.add_argument('--seed', type=int, default=0)
@@ -803,6 +820,8 @@ def main():
     if metadata.get('data_config') != 'panda_omron' or metadata.get('embodiment') != 'PandaOmron':
         raise ValueError('A PandaOmron policy is required')
     args.action_steps = resolve_policy_execution(metadata, args.action_steps, args.expected_policy)
+    language_grounder = select_instruction_grounder(policy_family(metadata), args.instruction_mode)
+    args.instruction_mode = language_grounder.mode
     if metadata.get('required_action_steps'):
         if not decision_steps_given:
             args.decision_steps = 32
@@ -885,10 +904,13 @@ def main():
             previous_depth_images = None
             previous_observation_step = None
             initial_scene_assessment = None
+            release_permit = None
             scene_assessment_source = None
 
             def ask(operation, context):
                 nonlocal api_calls, request_number, previous_images, previous_depth_images, previous_observation_step
+                nonlocal release_permit
+                release_permit = None
                 if args.max_api_calls and api_calls >= args.max_api_calls:
                     return None
                 current = {f'current:{key}': tools.observation[key].copy() for key in camera_keys}
@@ -945,6 +967,7 @@ def main():
                     max_steps - tools.steps, args.decision_steps)
                 context.update({
                     'working_context_version': 2,
+                    'instruction_mode': args.instruction_mode,
                     'execution_policy': args.execution_policy,
                     'original_goal': goal, 'episode_steps_left': max_steps - tools.steps,
                     'goal_ledger': ledger.context() if ledger is not None else None,
@@ -994,6 +1017,7 @@ def main():
                     'instruction_style': 'single_stage',
                     'max_stop_continuations': args.max_stop_continuations,
                     'control_owner': policy_family(metadata),
+                    'release_step_limit': min(args.action_steps, context.get('decision_step_limit', args.action_steps)),
                     'policy_step_quantum': metadata.get('required_action_steps'),
                     'capabilities': {'run_groot': True, 'set_gripper': tools.allow_gripper,
                                      'move_vertical': tools.allow_vertical,
@@ -1036,6 +1060,7 @@ def main():
                     request_number += 1
                     raise
                 api_calls += response['api_calls']
+                release_permit = response.get('release_confirmation')
                 record({'event': 'supervisor_response', 'request': request_number,
                         'wall_seconds': time.monotonic() - request_started, **response})
                 previous_images = current
@@ -1093,7 +1118,7 @@ def main():
                         raise ValueError('Initial agent planning must extract persistent original requirements')
                     ledger = GoalLedger(goal, requirements)
                     ledger.validate_window(plan)
-                    atomic_instruction_grounder().validate_plan(plan)
+                    language_grounder.validate_plan(plan)
                     ledger.observe(tools.steps, {f'current:{key}' for key in camera_keys})
                     attempts = AttemptHistory(ledger, args.max_goal_failures, args.max_goal_recoveries)
                     saved_plan['requirements'] = ledger.definitions()
@@ -1129,8 +1154,13 @@ def main():
                     max_stop_continuations=args.max_stop_continuations,
                     goal_ledger=ledger, attempt_history=attempts,
                     instruction_adapter=PolicyInstructionAdapter(policy_family(metadata)),
-                    instruction_grounder=atomic_instruction_grounder() if args.mode == 'agent' else None,
+                    instruction_grounder=language_grounder if args.mode == 'agent' else None,
                     execution_policy=args.execution_policy,
+                    release_authorizer=lambda decision, step, stage: bool(release_permit
+                        and release_permit.get('verdict') == 'confirmed'
+                        and release_permit.get('stage_id') == stage['id']
+                        and release_permit.get('step') == step
+                        and release_permit.get('program') == decision['program']),
                 )
                 result = {
                     'episode': episode, 'seed': args.seed + episode, 'task': args.task, 'mode': args.mode,
@@ -1148,6 +1178,7 @@ def main():
                     'max_supervisor_failures': args.max_supervisor_failures,
                     'planning_context': args.planning_context,
                     'instruction_style': 'single_stage' if args.mode == 'agent' else 'original_or_fixed',
+                    'instruction_mode': args.instruction_mode,
                     'max_stop_continuations': args.max_stop_continuations,
                     'transport_control': tools.transport_control.context() if tools.transport_control is not None else None,
                     'benchmark_membership': simulator_context['task']['benchmark_membership'],

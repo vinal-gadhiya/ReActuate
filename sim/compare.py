@@ -57,6 +57,7 @@ def run_command(args, condition, seed, output, plan=None):
     if plan is not None:
         command += ['--plan', str(plan)]
     if condition != 'baseline':
+        command += ['--instruction-mode', getattr(args, 'instruction_mode', 'auto')]
         command += ['--boundary-review' if getattr(args, 'boundary_review', True) else '--no-boundary-review']
         command += ['--execution-policy', getattr(args, 'execution_policy', 'episode')]
         if getattr(args, 'depth', False):
@@ -222,6 +223,7 @@ def main():
     parser.add_argument('--action-steps', type=int,
                         help='Actions per prediction; default uses backend recommendation in every condition')
     parser.add_argument('--expected-policy', choices=('gr00t', 'patchwam', 'awomo-0.5i'), default=os.environ.get('EXPECTED_POLICY'))
+    parser.add_argument('--instruction-mode', choices=('auto', 'atomic', 'relational'), default='auto')
     parser.add_argument('--decision-steps', type=int, help='Default 40, or 32 when expected policy is Awomo')
     parser.add_argument('--planning-context', choices=('summary', 'recent'), default='summary',
                         help='Persistent episode summary or recent events only; object memory is retained in both')

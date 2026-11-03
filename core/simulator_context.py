@@ -146,7 +146,7 @@ def build_simulator_context(task, is_composite, metadata, atomic_tasks, allow_gr
                 'tasks': [{key: entry[key] for key in ('name', 'category', 'description')}
                           for entry in catalog['tasks']],
                 'usage': 'Use this vocabulary to form concise single-action instructions for the actual goal. '
-                         'Try full source-to-destination transfers first; decompose for supported recovery. '
+                         'Plan pick, optional required navigation, and place separately from the start. '
                          'Keep detailed grounding in memory and success criteria. Templates are not executable tools '
                          'or evidence of checkpoint competence. Exact demonstration annotations may differ.',
             },

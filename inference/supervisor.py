@@ -20,7 +20,9 @@ from inference.perception import tracking_records, video_part
 from core.observations import rgb_diagnostics
 from core.working_context import working_context, task_references
 from core.instructions import PolicyInstructionAdapter
-from core.atomic_language import atomic_instruction_grounder
+from core.atomic_language import atomic_instruction_grounder, gripper_release_instruction, RELEASE_EXTENSION
+from core.release import RELEASE_POLICY, RELEASE_SCHEMA, validate_release
+from core.relational_language import instruction_grounder, instruction_policy
 from core.policy_config import validate_policy_interval
 from core.boundary_review import (BOUNDARY_POLICY, BOUNDARY_SCHEMA, CONFIRMATION_POLICY,
                                   boundary_completion, unconfirmed_boundary,
@@ -90,22 +92,27 @@ Examples: Pick up the <object>. Place the <object> on the <location>.
 Place the <object> in the <location>. Open the <thing>. Close the <thing>.
 Navigate to the <location>. Preserve the documented preposition and action verb;
 do not replace them with synonyms such as grab, set down, head over, or reposition.
-For a NEW pick-and-place objective FIRST use one complete transfer instruction:
-Pick the <object> from the <source> and place it on/in the <destination>.
-Choose the required documented preposition, not the literal text on/in; preserve
-other required relations such as under. Use the actual known source, destination
-and essential observed qualifiers. Pickup, navigation and placement stay in this
-ONE policy instruction. Success_criteria must require final placement/release;
-before advancing, the gripper must be clearly withdrawn from the placed object,
-with visible separation while the destination supports the object. Continued
-holding, contact or ambiguous clearance is not completion; retain the pending
-placement/transfer and let the frozen policy finish its release and withdrawal.
-A grasp or arrival is partial progress, not completion of the transfer.
-Do not preemptively create pick, navigate and place stages. Decompose only after
-observed wrong behavior/execution failure or a necessary supported recovery.
-Retain the same original requirement IDs and destination; skip phases already
-achieved, particularly pickup when the object is already held. Repair observed
-access/setup obstructions when necessary. Never invent a source or attribute.
+For EVERY NEW pick-and-place objective, plan separate stages FROM THE START:
+Pick the <object> from the <source>.; Navigate to the <fixture>. ONLY if travel
+is actually needed; Place the <object> on/in the <destination>. Choose the actual
+documented preposition, not literal on/in, preserving relations such as under.
+Do not first try a combined pickup-and-placement instruction. Pick success is
+supported acquisition and separation; navigation success is arrival while
+retaining the object; placement success is destination support, release and
+clear gripper withdrawal. Carry the SAME original final requirement IDs across
+these helper stages; acquisition alone does not satisfy the final placement.
+Skip phases already achieved, especially pickup when the object is already held.
+Omit navigation when destination is already in reach. Use observed source and
+essential distinguishing qualifiers. Repair observed access prerequisites.
+During a pending placement ONLY, if the correct object is held over/in the
+intended destination AND already supported or very close to its support surface,
+you may issue exactly Open the gripper. through run_groot as a temporary
+controlled_release recovery. Use steps<=release_step_limit, respecting backend
+quantum. Never request release from height, above an edge, with wrong identity,
+or from occluded/ambiguous geometry. A separate evidence review must authorize
+it. Do not add it as a standalone planned stage or mark placement complete from
+requesting release. Keep placement pending and then verify support, release and
+clear withdrawal. No forced numeric gripper commands exist.
 Full documented atomic formats are valid. Keep intentions, approach/alignment explanations and
 recovery commentary in evidence, not appended to the policy instruction.
 For specialized actions use the actual atomic description (buttons, levers,
@@ -149,12 +156,12 @@ Do not abandon an unfinished stage because a few bursts show no progress.
 The declared active-stage instruction stays committed until verified complete.
 A different executable instruction, or a replan interrupting executed work, needs
 recovery.necessity identifying a currently observed blocked_access, wrong_target,
-object_loss, unsafe_state, goal_contradiction, useful_required_object_held, or
+object_loss, unsafe_state, goal_contradiction, useful_required_object_held, controlled_release, or
 execution_failure. Use execution_failure for observed wrong execution requiring
 a different strategy or decomposition. Cite dated actual attempts and the failed
 physical effect; ordinary productive approach or elapsed burst counts alone do
-not justify switching. A full transfer is preferred first, not committed forever
-after evidence shows wrong behavior. Rewording a failed request alone is not repair.
+not justify switching. Keep the decomposed phases and preserve achieved progress;
+do not reacquire a held object. Rewording a failed request alone is not repair.
 Use not_needed only when no intervention is necessary. Mere lack of movement,
 elapsed steps, a different tool alias, or an explanation about resetting pose is
 not evidence that a switch is necessary. Cite current observations of the actual
@@ -315,6 +322,8 @@ class Supervisor:
                 raise ValueError('RGB checksum mismatch between simulator and supervisor')
         if operation == 'decide':
             validate_plan({'steps': [context['step']]})
+        language_grounder = instruction_grounder(context.get('control_owner', 'gr00t'),
+                                                context.get('instruction_mode', 'auto'))
         audit = []
         output_retry_used = False
 
@@ -344,6 +353,7 @@ class Supervisor:
         grounding = None
         boundary_review = None
         completion_confirmation = None
+        release_confirmation = None
         use_sam = context.get('use_sam', self.use_sam)
         if type(use_sam) is not bool:
             raise ValueError('use_sam must be a boolean')
@@ -442,12 +452,14 @@ class Supervisor:
             'atomic_instruction_catalog': task_references(self.instruction_catalog, context),
             'atomic_instruction_forms': self.instruction_grounder.forms,
             'atomic_instruction_forms_kind': self.instruction_grounder.catalog['instruction_forms_kind'],
+            'policy_language_extensions': [RELEASE_EXTENSION],
+            'instruction_mode': language_grounder.mode,
         })}]
         for name, frame in sorted({**images, **depth_images}.items()):
             content.extend([{'type': 'input_text', 'text': name}, image_part(frame)])
         if grounding is not None and grounding['mode'] == 'track':
             content.extend([{'type': 'input_text', 'text': f'Sparse clip from {key}; frames map to {context.get("clip_steps", [])}'}, media])
-        prompt = SUPERVISOR_POLICY + '\nOperation: ' + operation + '. Backend: ' + context.get('control_owner', 'gr00t') + '.'
+        prompt = instruction_policy(SUPERVISOR_POLICY, language_grounder) + '\nOperation: ' + operation + '. Backend: ' + context.get('control_owner', 'gr00t') + '.'
         current_cameras = {key for key in images if key.startswith('current:')}
         schema = grounded_plan_schema(current_cameras) if operation == 'plan' else DECISION_SCHEMA
         result, usage = api_response(self.model, content, instructions=prompt, schema=schema)
@@ -460,7 +472,7 @@ class Supervisor:
                 result = normalize_plan_cameras(result, current_cameras)
                 validate_grounded_plan(result, current_cameras)
                 if context.get('working_context_version') == 2:
-                    self.instruction_grounder.validate_generated_plan(result['steps'])
+                    language_grounder.validate_generated_plan(result['steps'])
             except (ValueError, KeyError, TypeError) as error:
                 validation_error = str(error)
         else:
@@ -475,13 +487,13 @@ class Supervisor:
                             context['observation_step'] + context['episode_steps_left'])
                 if context.get('working_context_version') == 2:
                     if result['status'] == 'replan':
-                        self.instruction_grounder.validate_generated_plan(
+                        language_grounder.validate_generated_plan(
                             result['replacement_steps'], committed_instruction=context['step']['instruction'])
                     elif result['status'] == 'continue':
                         for name, arguments in parse_program(result['program'], context['decision_step_limit']):
                             instruction = (arguments['instruction'] if name == 'run_groot' else
                                            f'Navigate to the {arguments["fixture"]}.')
-                            self.instruction_grounder.validate_generated(
+                            language_grounder.validate_generated(
                                 instruction, committed_instruction=context['step']['instruction'])
                 if context.get('instruction_style') == 'single_stage' and result['status'] == 'continue':
                     commands = parse_program(result['program'], context['decision_step_limit'])
@@ -501,6 +513,40 @@ class Supervisor:
                 # usage/audit and let the runner reject without motion, then feed
                 # the reason into the next budgeted decision.
                 validation_error = str(error)
+        if operation == 'decide' and not validation_error and result.get('status') == 'continue':
+            commands = parse_program(result['program'], context['decision_step_limit'])
+            if any(name == 'run_groot' and gripper_release_instruction(arguments['instruction'])
+                   for name, arguments in commands):
+                transport = result['assessment'].get('transport') or {}
+                if (not placement_stage(context) or len(commands) != 1
+                        or transport.get('grasp') != 'supported'
+                        or result['assessment']['outcome'] == 'satisfied'
+                        or any(update.get('status') == 'satisfied' for update in result.get('goal_updates', []))
+                        or (result.get('recovery') or {}).get('necessity') != 'controlled_release'
+                        or commands[0][1]['steps'] > context.get('release_step_limit', 0)):
+                    release_confirmation = {'validation_error': 'Release requires pending placement, supported target hold, '
+                                             'controlled_release recovery and one short policy chunk'}
+                elif remaining - len(audit) < 1:
+                    release_confirmation = {'validation_error': 'No API allowance for release readiness verification'}
+                else:
+                    release_content = [{'type': 'input_text', 'text': json.dumps({
+                        'context': review_context, 'proposed_release': result['recovery'],
+                        'held_object_claim': transport})}]
+                    for label, frame in sorted({**images, **depth_images}.items()):
+                        release_content.extend([{'type': 'input_text', 'text': label}, image_part(frame)])
+                    release_check, usage = api_response(self.model, release_content,
+                        instructions=RELEASE_POLICY, schema=RELEASE_SCHEMA)
+                    audit.append({**usage, 'role': 'release_readiness'})
+                    try:
+                        release_confirmation = validate_release(release_check, context)
+                    except (ValueError, KeyError, TypeError) as error:
+                        release_confirmation = {'validation_error': str(error)}
+                if release_confirmation.get('verdict') == 'confirmed':
+                    release_confirmation = {**release_confirmation, 'stage_id': context['step']['id'],
+                        'step': context['observation_step'], 'program': result['program']}
+                else:
+                    result = unconfirmed_boundary(result['assessment'],
+                        'Release is not authorized: ' + str(release_confirmation.get('evidence', release_confirmation.get('validation_error')))[:1500])
         if (review_enabled and operation == 'decide' and not validation_error
                 and result.get('assessment', {}).get('outcome') == 'satisfied'
                 and not context.get('planning_window_exhausted', False)):
@@ -508,6 +554,7 @@ class Supervisor:
             result = confirmed_result(result['assessment']) if accepted else unconfirmed_boundary(
                 result['assessment'], 'Stage completion is not confirmed: ' + json.dumps(completion_confirmation))
         return {'result': result, 'api_calls': len(audit), 'audit': audit, 'sam': grounding,
+                'release_confirmation': release_confirmation,
                 'boundary_review': boundary_review,
                 'completion_confirmation': completion_confirmation,
                 'received_image_diagnostics': diagnostics, 'validation_error': validation_error}

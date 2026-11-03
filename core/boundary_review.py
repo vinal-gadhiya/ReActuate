@@ -44,13 +44,16 @@ PLACEMENT_CONFIRMATION_SCHEMA = record_schema({
 
 
 def opening_stage(context):
+    from core.atomic_language import gripper_release_instruction
+    if gripper_release_instruction((context.get('step') or {}).get('instruction', '')):
+        return False
     return bool(re.match(r'^\s*(?:fully\s+)?open\b',
                          (context.get('step') or {}).get('instruction', ''), re.IGNORECASE))
 
 
 def placement_stage(context):
     instruction = (context.get('step') or {}).get('instruction', '')
-    if re.match(r'^\s*(?:place|put)\b|^\s*(?:pick|move|transfer)\b.*\b(?:place|put)\b', instruction, re.IGNORECASE):
+    if re.match(r'^\s*(?:place|put|set)\b|^\s*(?:pick|take|grasp|move|transfer)\b.*\b(?:place|put|set)\b', instruction, re.IGNORECASE):
         return True
     # Full official descriptions may express placement with other vocabulary.
     # Retrieve their public category; do not branch on task or object names.

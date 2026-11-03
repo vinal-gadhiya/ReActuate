@@ -14,6 +14,16 @@ ACTION_CLAUSE = re.compile(
     re.IGNORECASE)
 
 
+def gripper_release_instruction(instruction):
+    return isinstance(instruction, str) and instruction.strip().casefold().rstrip('.') == 'open the gripper'
+
+
+RELEASE_EXTENSION = {'id': 'controlled_gripper_release', 'template': 'Open the gripper.',
+    'source_kind': 'operator_requested_harness_extension', 'source_tasks': [],
+    'meaning': 'A language request to the frozen policy, not a numeric gripper override. '
+               'Only as a verified low-height release intervention during placement.'}
+
+
 def _pattern(template):
     """Instantiate documented alternatives, named slots, and door(s) notation."""
     parts, cursor = [], 0
@@ -36,6 +46,7 @@ def _pattern(template):
 
 
 class AtomicInstructionGrounder:
+    mode = 'atomic'
     VERSION = 'atomic-catalog-language-v2'
 
     def __init__(self, catalog=None):
@@ -61,6 +72,12 @@ class AtomicInstructionGrounder:
     def validate(self, instruction):
         if not isinstance(instruction, str) or not instruction.strip() or len(instruction) > 1000:
             raise ValueError('Atomic instruction must be nonempty text of at most 1000 characters')
+        if gripper_release_instruction(instruction):
+            return {'version': self.VERSION, 'form': RELEASE_EXTENSION['id'],
+                    'template': RELEASE_EXTENSION['template'], 'source_tasks': [], 'upstream_ref': None,
+                    'source_kind': RELEASE_EXTENSION['source_kind']}
+        if re.match(r'^\s*(?:fully\s+)?open\b.*\bgripper\b', instruction, re.IGNORECASE):
+            raise ValueError('Use exactly Open the gripper. for the verified placement release extension')
         for identifier, sources, template, pattern in self.patterns:
             match = pattern.fullmatch(instruction.strip())
             if match is None or any(ACTION_CLAUSE.search(slot) for slot in match.groups()):
@@ -75,6 +92,8 @@ class AtomicInstructionGrounder:
             'do not invent free-form motor instructions or append another action inside an entity slot.')
 
     def validate_plan(self, steps):
+        if any(gripper_release_instruction(step['instruction']) for step in steps):
+            raise ValueError('Open the gripper is a verified temporary placement intervention, not a standalone planned stage')
         return [self.validate(step['instruction']) for step in steps]
 
     def validate_generated(self, instruction, committed_instruction=None):
@@ -82,7 +101,9 @@ class AtomicInstructionGrounder:
         return self.validate(instruction)
 
     def validate_generated_plan(self, steps, committed_instruction=None):
-        return [self.validate_generated(step['instruction'], committed_instruction) for step in steps]
+        if any(re.match(r'^\s*pick\b.*\band\s+(?:place|put)\b', step['instruction'], re.IGNORECASE) for step in steps):
+            raise ValueError('Generated pick-and-place plans must start decomposed: pick, optional navigation, place')
+        return self.validate_plan(steps)
 
 
 @lru_cache(maxsize=1)

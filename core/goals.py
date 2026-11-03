@@ -27,7 +27,7 @@ RECOVERY_SCHEMA = record({'change_type': {'type': 'string', 'enum': ['strategy',
                           'description': {'type': 'string'}, 'observation_refs': REFS_SCHEMA,
                           'necessity': {'type': 'string', 'enum': [
                               'blocked_access', 'wrong_target', 'object_loss', 'unsafe_state',
-                              'goal_contradiction', 'useful_required_object_held', 'execution_failure', 'not_needed']}})
+                              'goal_contradiction', 'useful_required_object_held', 'execution_failure', 'controlled_release', 'reference_refinement', 'not_needed']}})
 LEGACY_RECOVERY_FIELDS = {'change_type', 'description', 'observation_refs'}
 ACTION_SCHEMA = record({'intent': {'type': 'string'}, 'object': {'type': 'string'},
                         'destination': {'type': 'string'}, 'instruction': {'type': 'string'}})
