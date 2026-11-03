@@ -1,7 +1,9 @@
-# ObjectWorld
+# ReActuate
 
-ObjectWorld explores how Meta model APIs can improve a frozen vision-language-action
-(VLA) policy through planning, visual verification, and recovery in RoboCasa.
+ReActuate explores how Muse and optional SAM visual evidence can guide a frozen
+vision-language-action (VLA) policy through task understanding, planning, progress
+tracking, and failure recovery in RoboCasa. Supported backends are GR00T N1.5,
+PatchWAM, and Awomo-0.5I. Task success comes from the simulator's task check.
 
 ```text
 sim/         RoboCasa execution, rendering, rollouts, evaluation, simulator image
@@ -9,18 +11,54 @@ inference/   VLA serving, Meta API adapters, planning, perception, recovery
 core/        Shared interfaces, configuration conventions, trace formats
 ```
 
-Simulation and GR00T N1.5 inference run in independent containers on Jetson AGX
-Thor. Follow [the inference and atomic-task evaluation guide](inference/RUNNING.md)
-to build both images, download the checkpoint, and evaluate `OpenCabinet`.
-The standalone simulator setup is documented below.
+Simulation, frozen-policy inference, and Muse supervision run in separate
+containers on Jetson AGX Thor. Policy inference and EGL rendering use Thor's GPU;
+MuJoCo physics runs on the CPU. The supervisor calls the hosted Meta API.
 
-For composite tasks, [the Meta agent guide](inference/AGENT.md) covers Muse
-decomposition, bounded robot programs, visual verification, optional SAM
-grounding, and comparisons with fixed plans and the original GR00T instruction.
+## Choose a setup
 
-The optional [PatchWAM setup guide](inference/PATCHWAM.md) adds a separate frozen
-backend using its released preprocessing and checkpoint. Select it with the
-PatchWAM Compose overlay; default GR00T commands remain unchanged.
+| Backend or controller | Guide | Compose files |
+| --- | --- | --- |
+| Awomo-0.5I installation and checkpoints | [Awomo setup](inference/AWOMO.md) | `compose.yaml` + `compose.awomo.yaml` |
+| Muse situational control (Awomo default on this branch) | [Planning and execution](inference/SITUATIONAL.md) | Awomo overlay, `--agent-control situational` |
+| Muse staged control with verification | [Staged agent guide](inference/AGENT.md) | Selected backend, `--agent-control staged` |
+| PatchWAM | [PatchWAM setup](inference/PATCHWAM.md) | `compose.yaml` + `compose.patchwam.yaml` |
+| GR00T N1.5 (default Compose backend) | [Inference and evaluation](inference/RUNNING.md) | `compose.yaml` |
+
+Select one policy overlay at a time. Baseline runs use the original task
+instruction. Awomo agent runs on `experiment/awomo-situational` default to direct
+Muse control: the first response describes task success, scene understanding and
+an execution plan before any action. Later responses revise the plan and a
+persistent progress checklist. Muse can change instructions each feedback
+interval using atomic task vocabulary; this mode has no independent verifier or
+subtask boundary approval. SAM is optional. The staged controller remains
+available explicitly for comparison.
+
+Run builds, Python tests, simulation and inference in Thor containers. The guides
+include build/download/startup commands and matched-scene evaluations. Outputs
+include videos, labelled observations, JSONL traces, API audits and task results;
+the situational controller also saves `situational_plan.json`. API calls and
+decisions are uncapped by default; use `--max-steps 4000` for a 4,000-step physical
+horizon. Infrastructure errors and explicit supervision caps can still end a run.
+
+## Existing Docker installations
+
+ReActuate images and checkpoint/cache volumes now use the `reactuate-` prefix.
+Rebuild the selected images after updating; the simulator image remains
+`robocasa-thor:latest`. To reuse an existing checkpoint or cache volume without
+downloading it again, find its name with `docker volume ls` and set the matching
+variable in your local `.env` before starting Compose:
+
+| Existing data | Volume-name override |
+| --- | --- |
+| GR00T checkpoints | `REACTUATE_CHECKPOINT_VOLUME` |
+| PatchWAM checkpoints | `REACTUATE_PATCHWAM_CHECKPOINT_VOLUME` |
+| Awomo checkpoints | `REACTUATE_AWOMO_CHECKPOINT_VOLUME` |
+| Hugging Face cache | `REACTUATE_HF_CACHE_VOLUME` |
+
+Overrides select existing storage; this rename does not copy or delete volumes.
+Without overrides, Compose uses the new names and downloads must populate those
+volumes. Kitchen assets keep the existing `robocasa-thor-assets` volume.
 
 ## RoboCasa and MuJoCo on Jetson AGX Thor
 

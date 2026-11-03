@@ -61,7 +61,7 @@ including its relational language mode and independent verification.
 After committing/pushing this branch and fetching/checking it out on Thor:
 
 ```bash
-sudo docker compose -f compose.yaml -f compose.awomo.yaml --profile agent build sim supervisor
+sudo docker compose -f compose.yaml -f compose.awomo.yaml --profile agent build inference sim supervisor
 
 sudo docker compose -f compose.yaml -f compose.awomo.yaml --profile agent \
   run --rm --no-deps supervisor python -m unittest discover -s tests -v

@@ -7,26 +7,44 @@ may depend on `core`. Avoid a global dependency set or framework before needed.
 `policy_http.py` implements a versioned NumPy transport with no torch or pickle
 dependency. The client retrieves JSON metadata and exchanges NPZ observation and
 action dictionaries using HTTP. NPZ reads disable pickle. Inference responses
-echo request IDs so the simulator can reject stale results. This initial runner
-is synchronous; broader skill/verification schemas below remain planned.
+echo request IDs so the simulator can reject stale results. Execution is
+synchronous at policy chunk boundaries. The supervisor client supports staged
+planning/decisions (`/plan`, `/decide`) and direct situational control (`/act`).
 
 `agent.py` defines and validates subtask plans, verification decisions, and the
 literal-call command language. `SupervisorClient` exchanges visual observations
 and agent context with the Meta supervisor. No generated code receives the raw
 simulator object or a general-purpose Python execution capability.
 
-`execution.py` validates evidence-backed interruptions of an active stage. The
+`situational.py` defines the Awomo direct-control response and execution loop.
+Muse can select a new atomic-language instruction at each observation without
+stage completion or an independent verifier. `situational_planning.py` preserves
+the initial success picture and original requirement definitions separately from
+the mutable plan, dated scene facts, unanswered questions and progress claims.
+The first response must include this planning before any physical action; later
+responses update it in the same action-selection call. Planning state persists
+through the episode, including entries outside recent event history. These are
+model claims; they do not set simulator success. See
+[situational control](../inference/SITUATIONAL.md).
+
+`execution.py` validates evidence-backed interruptions in the staged controller. The
 CLI's episode execution policy keeps physical and supervision budgets separate:
 short retry limits do not terminate a valid unfinished stage. Completion and
 necessary interventions remain dated model claims, not simulator truth.
 
-`atomic_language.py` validates agent policy instructions against the versioned
+`atomic_language.py` validates atomic-mode policy instructions against the versioned
 atomic descriptions and the catalog's explicitly labelled derived instruction
 forms. It accepts instantiated documentation placeholders and split transfer
 clauses without rewriting accepted text. The agent runner validates plans,
 replans and commands and records form provenance in tool traces. Composite skill
 keys guide retrieval of atomic references; they are not compulsory action order
 or evidence of checkpoint competence.
+
+`relational_language.py` supplies the optional Awomo staged language experiment.
+Situational mode uses atomic vocabulary; staged Awomo can use relational action
+frames and observed spatial anchors. `awomo.py` preserves the backend's declared
+camera history, episode identity and action mapping. `policy_config.py` validates
+backend selection and execution cadence before motion.
 
 `simulator_context.py` supplies the public simulator guide, tool descriptions,
 task-category references, and optional operator notes. It never queries hidden

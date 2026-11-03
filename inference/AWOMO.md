@@ -102,8 +102,11 @@ sudo docker compose -f compose.yaml -f compose.awomo.yaml \
 ```
 
 Supply `HF_TOKEN` in the existing Compose environment if needed to access the
-checkpoint's base models. Downloads use a separate `objectworld-awomo-05i-checkpoints`
-volume; existing checkpoint volumes are retained.
+checkpoint's base models. Downloads use a separate `reactuate-awomo-05i-checkpoints`
+volume by default. To reuse a prior download, set `REACTUATE_AWOMO_CHECKPOINT_VOLUME`
+to that existing volume's name in your local `.env`; `REACTUATE_HF_CACHE_VOLUME`
+can similarly select an existing cache. See the
+[storage migration notes](../README.md#existing-docker-installations).
 
 The inference image targets ARM64 Thor using CUDA 13, Python 3.12,
 PyTorch 2.9.1 and torchvision 0.24.1, with the other official image-inference

@@ -54,7 +54,11 @@ The downloader resolves the requested revision to a commit and records it in
 `download_manifest.json`. Use `--revision <commit>` for subsequent identical
 downloads. No training datasets are needed.
 
-Weights persist in the named volume `objectworld-checkpoints`, at:
+Weights persist in the named volume `reactuate-checkpoints`, at:
+
+Set `REACTUATE_CHECKPOINT_VOLUME` in your local `.env` to reuse a prior checkpoint
+volume, and `REACTUATE_HF_CACHE_VOLUME` for an existing Hugging Face cache. See
+[existing Docker installations](../README.md#existing-docker-installations).
 
 ```text
 /checkpoints/gr00t_n1-5/multitask_learning/checkpoint-120000

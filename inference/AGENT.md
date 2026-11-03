@@ -1,5 +1,10 @@
 # Shared RoboCasa agent harness
 
+This guide describes the staged controller. Awomo agent runs on this branch
+default to [situational control](SITUATIONAL.md), with initial task/scene planning,
+persistent progress and freely revisable instructions. Use `--agent-control staged`
+to select the flow below with Awomo. GR00T and PatchWAM default to staged control.
+
 This harness targets all RoboCasa task families. Task names and objects belong in
 public reference catalogs and evaluation fixtures, not special-case controller
 branches. Policy observation formats and numerical actions remain unchanged.
@@ -18,7 +23,7 @@ branches. Policy observation formats and numerical actions remain unchanged.
    carrying when relevant. Washing, heating, switching, pouring and stirring do
    not have to masquerade as transfer phases.
 5. One validated literal tool call executes for a bounded number of steps.
-   `run_groot` invokes the selected frozen backend, either GR00T or PatchWAM.
+   `run_groot` invokes the selected frozen backend: GR00T, PatchWAM or Awomo.
    No generated Python is evaluated. The CLI exposes no manual motor overrides.
 6. Each actual execution receives an attempt ID. Muse reviews its observed
    outcome; attempt history belongs to goal IDs, not replaceable stage IDs.

@@ -6,14 +6,46 @@ policy clients, rollout recording, task scoring, and experiment execution.
 - `Dockerfile`: Thor simulator image. Build from the repository root with
   `docker build -f sim/Dockerfile -t robocasa-thor:latest .`.
 - `smoke_test.py`: physics, NVIDIA EGL, and optional kitchen checks.
-- `evaluate.py`: atomic-task evaluation against the GR00T HTTP service, with
+- `evaluate.py`: task evaluation against the selected frozen-policy HTTP service, with
   per-episode videos and JSON results. See [the run guide](../inference/RUNNING.md).
 - `run_agent.py`: atomic or composite tasks with the original instruction, a
   fixed subtask schedule, or Muse-supervised execution. See [the agent guide](../inference/AGENT.md).
-- `compare.py`: sequential comparisons of GR00T, Muse, and Muse + SAM on matched
+- `compare.py`: sequential comparisons of the selected policy baseline, Muse, and Muse + SAM on matched
   scene seeds, with videos, traces, and aggregated task-success and latency results.
 
-Agent episodes retain semantic object memory across decisions and replans. Muse
+## Awomo situational control
+
+On this branch, Awomo `--mode agent` runs default to `--agent-control situational`.
+The first Muse response supplies a success picture, original requirements,
+scene facts and unknowns, and an execution plan before the first action runs.
+Every subsequent request includes the full persistent planning state. Muse updates
+dated progress claims and adjusts its plan and instructions from current images.
+Instructions use atomic task templates and vocabulary; documented transfers or
+separate pick/navigation/place actions are available as appropriate.
+
+This mode has no independent verifier, stage boundary detection, recovery
+declaration or stage commitment. Muse judges the readiness for the literal
+`Open the gripper.` language instruction itself, limited to one short policy
+chunk. The simulator decides whole-task success/end; `--max-steps` limits physical
+execution. API/decision caps default to unlimited. Failed requests never authorize
+replaying an earlier instruction; repeated operational failures still end a run.
+Optional SAM supplies visual evidence. The frozen policy owns numerical actions.
+
+Awomo requires 16-step predictions; use `--action-steps 16 --decision-steps 32`.
+See [Awomo installation](../inference/AWOMO.md) and
+[situational commands and artifacts](../inference/SITUATIONAL.md).
+`situational_plan.json` saves the current task/scene model, progress checklist and
+plan; `trace.jsonl` retains their dated versions alongside tool execution and API
+audits. Videos, observations, scene identity, timing and results are saved under
+the requested output directory. State resets between episodes.
+
+## Staged controller
+
+Select `--agent-control staged` to reproduce the parent controller with Awomo.
+GR00T and PatchWAM continue to select this controller automatically. The following
+stage, verification, recovery and fallback rules apply to staged runs.
+
+Staged agent episodes retain semantic object memory across decisions and replans. Muse
 can request perception without motion, select a camera/target for SAM detection
 or clip tracking, and request bounded fixture navigation before resuming a pending
 transfer. Motion diagnostics compare declared robot measurements and rendered
@@ -33,7 +65,7 @@ summary; `supervisor_request` trace events save the exact context sent to Muse.
 memory and the existing recent-event/handoff context. No extra API calls or
 physical actions are introduced. See [the PatchWAM guide](../inference/PATCHWAM.md#in-context-planning-and-object-memory).
 
-The selected frozen policy (GR00T or PatchWAM) owns all control actions. The CLI no longer offers `--hybrid-control` or
+The selected frozen policy (GR00T, PatchWAM or Awomo) owns all control actions. The CLI no longer offers `--hybrid-control` or
 `--allow-gripper`: no action arbitration, forced grasp latch, manual release,
 base/orientation freeze, or Cartesian placement corrections are applied. Muse
 and SAM provide planning, visual memory, verification, and language corrections.
@@ -42,7 +74,7 @@ Agent policy instructions use atomic-catalog vocabulary and formats, with exactl
 one tool call per decision and observation before the next stage. New pick-and-place
 objectives use separate pick and place stages from the start, with navigation
 only when travel is necessary. Final support, release and clear gripper withdrawal
-are required for placement completion. Awomo's `--instruction-mode auto` selects
+are required for placement completion. In staged mode, Awomo's `--instruction-mode auto` selects
 relational language with observed spatial anchors and optional combined transfers;
 `--instruction-mode atomic` restores strict catalog wording and decomposed plans.
 A short literal `Open the gripper.` policy
@@ -111,6 +143,8 @@ and unexpected server errors remain errors. Initial planning has no policy
 instruction to continue and still fails if its API request fails. Rebuild both
 `sim` and `supervisor` and recreate the supervisor service to use the structured
 failure protocol.
+
+## Shared execution and storage
 
 Assets use `robocasa-thor-assets:/opt/robocasa-assets`; generated artifacts go
 under ignored `outputs/`. Keep model weights and API credentials out of this image.
