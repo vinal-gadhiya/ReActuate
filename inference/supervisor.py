@@ -514,7 +514,9 @@ class Supervisor:
                 # the reason into the next budgeted decision.
                 validation_error = str(error)
         if operation == 'decide' and not validation_error and result.get('status') == 'continue':
-            commands = parse_program(result['program'], context['decision_step_limit'])
+            commands = parse_program(result['program'], context['decision_step_limit'],
+                                     context['capabilities']['set_gripper'],
+                                     context['capabilities'].get('move_vertical', False))
             if any(name == 'run_groot' and gripper_release_instruction(arguments['instruction'])
                    for name, arguments in commands):
                 transport = result['assessment'].get('transport') or {}

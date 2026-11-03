@@ -381,7 +381,8 @@ def run_subtasks(tools, plan, mode, decide, record, decision_steps=40, max_decis
                     validate_decision(decision, max(0, min(decision_steps, remaining)), tools.allow_gripper,
                                       getattr(tools, 'allow_vertical', False))
                     if decision['status'] == 'continue':
-                        for name, arguments in parse_program(decision['program'], min(decision_steps, remaining)):
+                        for name, arguments in parse_program(decision['program'], min(decision_steps, remaining),
+                                                             tools.allow_gripper, getattr(tools, 'allow_vertical', False)):
                             if name == 'run_groot' and gripper_release_instruction(arguments['instruction']):
                                 if (arguments['steps'] > getattr(tools, 'chunk_steps', decision_steps)
                                         or release_authorizer is None
