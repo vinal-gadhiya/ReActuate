@@ -54,7 +54,7 @@ The downloader resolves the requested revision to a commit and records it in
 `download_manifest.json`. Use `--revision <commit>` for subsequent identical
 downloads. No training datasets are needed.
 
-Weights persist in the named volume `objectworld-checkpoints`, at:
+Weights persist in the named volume `reactuate-checkpoints`, at:
 
 ```text
 /checkpoints/gr00t_n1-5/multitask_learning/checkpoint-120000
@@ -181,3 +181,9 @@ unless you intend to delete them.
 - [Pinned policy implementation](https://github.com/robocasa-benchmark/Isaac-GR00T/blob/9d7d7a9eb7ad30bd8ce30448d9ab53a918b45b10/gr00t/model/policy.py)
 - [Checkpoint](https://huggingface.co/robocasa/robocasa365_checkpoints/tree/main/gr00t_n1-5/multitask_learning/checkpoint-120000)
 - [Official PyTorch CUDA 13 wheels](https://download.pytorch.org/whl/cu130/torch/)
+
+## Reusing existing checkpoint storage
+
+Set `REACTUATE_CHECKPOINT_VOLUME` to the name of an existing checkpoint volume
+and `REACTUATE_HF_CACHE_VOLUME` to an existing cache in your local `.env` to
+reuse prior downloads. See [Docker storage migration](../README.md#existing-docker-installations).
