@@ -32,6 +32,36 @@ The simulator's task check determines whole-task success. Outputs include
 videos, labelled observations, traces, API audit and task results; see the
 backend/agent guides for commands and the controller behavior on this branch.
 
+## Experiment branches
+
+Choose the branch for the controller you want to evaluate, then follow that
+branch's README and setup guides. Features and CLI options differ between
+branches; the Awomo experiments are available on the branches listed below.
+
+| Branch | Purpose | Documentation |
+| --- | --- | --- |
+| `main` | GR00T N1.5 and PatchWAM with Muse planning, verification and recovery. | This README |
+| `experiment/awomo-situational` | Awomo with flexible Muse instructions, initial task/scene planning and persistent progress tracking, without independent verifiers or subtask boundaries. | [Branch README](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2Fawomo-situational/README.md), [Awomo setup](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2Fawomo-situational/inference/AWOMO.md), [situational runs](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2Fawomo-situational/inference/SITUATIONAL.md) |
+| `experiment/2953296-full-access-transfer` | Awomo, GR00T and PatchWAM with staged supervision, paired-door checks, placement/release verification and optional Awomo relational instructions. | [Branch README](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2F2953296-full-access-transfer/README.md) |
+| `experiment/2953296-evaluation` | Earlier GR00T/PatchWAM experiment with atomic instruction grounding and stage boundary confirmation. | [Branch README](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2F2953296-evaluation/README.md) |
+| `experiment/244b087-simulator-termination` | Earlier experiment adjusting termination behavior and instruction/recovery flexibility. | [Branch README](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2F244b087-simulator-termination/README.md) |
+| `baseline/244b087-evaluation` | Historical harness for comparisons with the earlier controller. | [Branch README](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/baseline%2F244b087-evaluation/README.md) |
+
+For the flexible Awomo experiment, switch branches on Thor before building:
+
+```bash
+git fetch origin
+git switch experiment/awomo-situational
+git pull --ff-only
+```
+
+Then follow that branch's [Awomo setup](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2Fawomo-situational/inference/AWOMO.md)
+and [situational run commands](https://github.com/vinal-gadhiya/meta-ai-hackathon2026/blob/experiment%2Fawomo-situational/inference/SITUATIONAL.md).
+Rebuild/recreate the services as directed there so the running containers use
+the selected branch's code. These are experiment variants; their names do not
+establish a ranking in task success or latency. Use matched scenes/seeds when
+comparing them.
+
 ## Existing Docker installations
 
 ReActuate Docker images and default checkpoint/cache volumes use the
