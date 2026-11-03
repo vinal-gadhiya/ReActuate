@@ -97,7 +97,7 @@ sudo docker compose -f compose.yaml -f compose.awomo.yaml \
 ```
 
 Supply `HF_TOKEN` in the existing Compose environment if needed to access the
-checkpoint's base models. Downloads use a separate `objectworld-awomo-05i-checkpoints`
+checkpoint's base models. Downloads use a separate `reactuate-awomo-05i-checkpoints`
 volume; existing checkpoint volumes are retained.
 
 The inference image targets ARM64 Thor using CUDA 13, Python 3.12,

@@ -1,7 +1,7 @@
 services:
   supervisor:
     profiles: [agent]
-    image: objectworld-supervisor:latest
+    image: reactuate-supervisor:latest
     build:
       context: .
       dockerfile: inference/Dockerfile.supervisor
@@ -14,7 +14,7 @@ services:
     networks: [robotics]
 
   inference:
-    image: objectworld-gr00t:latest
+    image: reactuate-gr00t:latest
     build:
       context: .
       dockerfile: inference/Dockerfile
@@ -51,6 +51,6 @@ volumes:
   assets:
     name: robocasa-thor-assets
   checkpoints:
-    name: objectworld-checkpoints
+    name: ${REACTUATE_CHECKPOINT_VOLUME:-reactuate-checkpoints}
   huggingface-cache:
-    name: objectworld-huggingface-cache
+    name: ${REACTUATE_HF_CACHE_VOLUME:-reactuate-huggingface-cache}

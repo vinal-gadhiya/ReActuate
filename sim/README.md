@@ -1,4 +1,11 @@
-# Simulation
+# ReActuate simulation
+
+This branch supports GR00T N1.5, PatchWAM and Awomo-0.5I.
+API and decision caps are unlimited by default; explicit caps remain available.
+Its controller behavior is described below and in the
+[agent guide](../inference/AGENT.md); choose commands from this branch's docs.
+See [Docker storage migration](../README.md#existing-docker-installations)
+to preserve existing checkpoint downloads after the ReActuate rename.
 
 Own RoboCasa/MuJoCo setup, environment lifecycle, rendering, simulator-side
 policy clients, rollout recording, task scoring, and experiment execution.
@@ -6,11 +13,11 @@ policy clients, rollout recording, task scoring, and experiment execution.
 - `Dockerfile`: Thor simulator image. Build from the repository root with
   `docker build -f sim/Dockerfile -t robocasa-thor:latest .`.
 - `smoke_test.py`: physics, NVIDIA EGL, and optional kitchen checks.
-- `evaluate.py`: atomic-task evaluation against the GR00T HTTP service, with
+- `evaluate.py`: task evaluation against the selected frozen-policy HTTP service, with
   per-episode videos and JSON results. See [the run guide](../inference/RUNNING.md).
 - `run_agent.py`: atomic or composite tasks with the original instruction, a
   fixed subtask schedule, or Muse-supervised execution. See [the agent guide](../inference/AGENT.md).
-- `compare.py`: sequential comparisons of GR00T, Muse, and Muse + SAM on matched
+- `compare.py`: sequential comparisons of the policy baseline, Muse, and Muse + SAM on matched
   scene seeds, with videos, traces, and aggregated task-success and latency results.
 
 Agent episodes retain semantic object memory across decisions and replans. Muse

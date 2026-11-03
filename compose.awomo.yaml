@@ -5,7 +5,7 @@ services:
       EXPECTED_POLICY: awomo-0.5i
       POLICY_TIMEOUT: '600'
   inference:
-    image: objectworld-awomo-05i:latest
+    image: reactuate-awomo-05i:latest
     build:
       context: .
       dockerfile: inference/Dockerfile.awomo
@@ -17,4 +17,4 @@ services:
       - huggingface-cache:/cache/huggingface
 volumes:
   awomo-checkpoints:
-    name: objectworld-awomo-05i-checkpoints
+    name: ${REACTUATE_AWOMO_CHECKPOINT_VOLUME:-reactuate-awomo-05i-checkpoints}
