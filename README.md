@@ -1,6 +1,6 @@
-# ObjectWorld
+# ReActuate
 
-ObjectWorld explores how Meta model APIs can improve a frozen vision-language-action
+ReActuate explores how Meta model APIs can improve a frozen vision-language-action
 (VLA) policy through planning, visual verification, and recovery in RoboCasa.
 
 ```text
@@ -9,18 +9,47 @@ inference/   VLA serving, Meta API adapters, planning, perception, recovery
 core/        Shared interfaces, configuration conventions, trace formats
 ```
 
-Simulation and GR00T N1.5 inference run in independent containers on Jetson AGX
-Thor. Follow [the inference and atomic-task evaluation guide](inference/RUNNING.md)
-to build both images, download the checkpoint, and evaluate `OpenCabinet`.
-The standalone simulator setup is documented below.
+Simulation, frozen-policy inference and Muse supervision run in separate
+containers on Jetson AGX Thor. MuJoCo physics uses the CPU; policy inference
+and EGL rendering use the GPU. The supervisor calls hosted Meta model APIs.
 
-For composite tasks, [the Meta agent guide](inference/AGENT.md) covers Muse
-decomposition, bounded robot programs, visual verification, optional SAM
-grounding, and comparisons with fixed plans and the original GR00T instruction.
+## Setup and evaluation
 
-The optional [PatchWAM setup guide](inference/PATCHWAM.md) adds a separate frozen
-backend using its released preprocessing and checkpoint. Select it with the
-PatchWAM Compose overlay; default GR00T commands remain unchanged.
+This README describes branch `experiment/2953296-evaluation` and its existing controller.
+
+- [GR00T N1.5 setup and atomic-task evaluation](inference/RUNNING.md)
+  uses `compose.yaml` and the released multitask checkpoint.
+- [PatchWAM setup](inference/PATCHWAM.md) uses `compose.yaml` plus
+  `compose.patchwam.yaml` and a separate checkpoint volume.
+- [Muse agent execution and optional SAM](inference/AGENT.md) covers this
+  branch's planning, verification, recovery and matched-scene comparisons.
+
+Select one policy overlay at a time. Baseline runs use the original task
+instruction. Run builds, Python tests, simulation and inference in Thor
+containers. This branch defaults to 40 supervisor decisions and 60 API calls per episode.
+Use explicit budgets appropriate to the run; consult this branch's CLI help.
+The simulator's task check determines whole-task success. Outputs include
+videos, labelled observations, traces, API audit and task results; see the
+backend/agent guides for commands and the controller behavior on this branch.
+
+## Existing Docker installations
+
+ReActuate Docker images and default checkpoint/cache volumes use the
+`reactuate-` prefix. Rebuild the selected images after updating. The simulator
+image remains `robocasa-thor:latest`, and kitchen assets retain the
+`robocasa-thor-assets` volume.
+
+To reuse prior downloads, find the existing names with `docker volume ls`
+and set the appropriate variables in your local `.env` before invoking Compose:
+
+| Existing data | Volume-name override |
+| --- | --- |
+| GR00T checkpoints | `REACTUATE_CHECKPOINT_VOLUME` |
+| PatchWAM checkpoints | `REACTUATE_PATCHWAM_CHECKPOINT_VOLUME` |
+| Hugging Face cache | `REACTUATE_HF_CACHE_VOLUME` |
+
+Overrides reuse existing storage; the rename does not copy or delete volumes.
+Without overrides, downloads must populate the newly named volumes.
 
 ## RoboCasa and MuJoCo on Jetson AGX Thor
 

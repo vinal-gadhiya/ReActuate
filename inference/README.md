@@ -1,4 +1,4 @@
-# Inference and supervision
+# ReActuate inference and supervision
 
 Own VLA serving, model-specific observation/action adapters, Meta API clients,
 visual evidence extraction, planning, progress verification, and recovery.
@@ -8,16 +8,13 @@ The [Meta agent guide](AGENT.md) describes the implemented Muse planner,
 supervisor service, bounded command programs, optional SAM grounding, and
 composite-task runs. The supervisor uses a separate lightweight CPU image.
 
-Add modules when their first use is implemented:
+Implemented entry points are `serve.py` for serialized frozen-policy HTTP
+serving, `supervisor.py` for Muse planning/decisions and optional SAM,
+`meta_api.py` for hosted API transport, and `perception.py` for visual evidence.
+Shared schemas and protocol clients live in `core/`; physical execution lives
+in `sim/`. No general-purpose generated Python runs against the simulator.
 
-- `vla/`: GR00T adapter first; replaceable policy interface later.
-- `providers/`: Meta Model API and hosted-provider clients.
-- `planning/`: skill selection and instruction construction.
-- `perception/`: evidence, optional SAM masks and RGB-D geometry.
-- `supervision/`: progress state, bounded retries, recovery, and stop decisions.
-- `prediction/`: optional learned predictors if experiments justify them.
-
-Current target: the RoboCasa GR00T N1.5 fork at
+The default GR00T backend targets: the RoboCasa GR00T N1.5 fork at
 `9d7d7a9eb7ad30bd8ce30448d9ab53a918b45b10`, with the linked multitask
 `checkpoint-120000`. Its metadata, normalization, and policy transforms are
 preserved. Follow [RUNNING.md](RUNNING.md) for container builds, checkpoint
@@ -50,3 +47,10 @@ over time, allow `unknown` verdicts, and cap calls/retries per episode. Reject
 malformed decisions and unsupported skills. On timeout, follow a configured
 bounded fallback or end the episode with a recorded reason. Reset VLA temporal
 state and discard pending actions when the active instruction changes.
+
+This branch defaults to 40 supervisor decisions and 60 API calls per episode.
+Use explicit budgets appropriate to the run; consult this branch's CLI help.
+Image names and checkpoint/cache defaults now use the `reactuate-` prefix.
+See [existing Docker installations](../README.md#existing-docker-installations)
+to reuse prior checkpoint/cache volumes through environment overrides.
+Tests, builds and GPU execution checks run in Thor containers.
